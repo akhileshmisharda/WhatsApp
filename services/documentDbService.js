@@ -41,6 +41,7 @@ async function ensureAadhaarColumnsExist() {
         const existingCols = cols.map(c => c.Field);
         
         const requiredCols = [
+            { name: 'relation_status', def: 'VARCHAR(50) DEFAULT NULL' },
             { name: 'father_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'father_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'husband_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
@@ -93,6 +94,7 @@ async function insertOrUpdateAadhaar({
     dob,
     genderEnglish,
     genderHindi,
+    relationStatus,
     fatherNameEnglish,
     fatherNameHindi,
     husbandNameEnglish,
@@ -118,9 +120,34 @@ async function insertOrUpdateAadhaar({
 }) {
     await ensureAadhaarColumnsExist();
 
-    const cleanAadhaar = sanitizeInput(aadharNumber);
+    let cleanAadhaar = sanitizeInput(aadharNumber);
     const cleanSender = sanitizeInput(senderMobile) || 'Unknown';
     const cleanReceiver = sanitizeInput(receiverMobile) || 'Unknown';
+
+    // Determine if current scan is Front vs Back
+    let isFrontScan = detectedSide === 'front';
+    let isBackScan = detectedSide === 'back';
+    if (!isFrontScan && !isBackScan) {
+        const hasFrontInfo = !!nameEnglish || !!dob || !!genderEnglish;
+        const hasBackInfo = !!addressEnglish || !!addressHindi || !!fatherNameEnglish || !!husbandNameEnglish || !!pincode;
+        if (hasFrontInfo && !hasBackInfo) isFrontScan = true;
+        else if (hasBackInfo && !hasFrontInfo) isBackScan = true;
+        else { isFrontScan = true; isBackScan = true; }
+    }
+
+    // STRICT SANITIZATION: Never accept back-side barcode/1947/1800 numbers as Aadhaar
+    if (isBackScan || (cleanAadhaar && (cleanAadhaar.includes('1947') || cleanAadhaar.includes('1800') || cleanAadhaar.replace(/\s/g, '').length !== 12))) {
+        cleanAadhaar = null;
+    }
+
+    let resolvedRelation = sanitizeInput(relationStatus);
+    if (!resolvedRelation) {
+        if (husbandNameEnglish || husbandNameHindi) resolvedRelation = 'W/O';
+        else if (fatherNameEnglish || fatherNameHindi) {
+            if (genderEnglish && genderEnglish.toLowerCase() === 'female') resolvedRelation = 'D/O';
+            else resolvedRelation = 'S/O';
+        }
+    }
 
     const payload = {
         upload_id: uploadId || null,
@@ -131,6 +158,7 @@ async function insertOrUpdateAadhaar({
         dob: sanitizeInput(dob),
         gender_english: sanitizeInput(genderEnglish),
         gender_hindi: sanitizeInput(genderHindi),
+        relation_status: resolvedRelation,
         father_name_english: sanitizeInput(fatherNameEnglish),
         father_name_hindi: sanitizeInput(fatherNameHindi),
         husband_name_english: sanitizeInput(husbandNameEnglish),
@@ -153,22 +181,11 @@ async function insertOrUpdateAadhaar({
         receiver_mobile: cleanReceiver
     };
 
-    // Determine if current scan is Front vs Back
-    let isFrontScan = detectedSide === 'front';
-    let isBackScan = detectedSide === 'back';
-    if (!isFrontScan && !isBackScan) {
-        const hasFrontInfo = !!payload.name_english || !!payload.dob || !!payload.gender_english;
-        const hasBackInfo = !!payload.address_english || !!payload.address_hindi || !!payload.father_name_english || !!payload.husband_name_english || !!payload.pincode;
-        if (hasFrontInfo && !hasBackInfo) isFrontScan = true;
-        else if (hasBackInfo && !hasFrontInfo) isBackScan = true;
-        else { isFrontScan = true; isBackScan = true; }
-    }
-
     try {
         let existing = null;
 
         // 1. Primary Lookup: Exact Aadhaar Number (if valid 12-digit)
-        if (payload.aadhar_number && payload.aadhar_number !== "Not Found" && payload.aadhar_number.replace(/\s/g, '').length >= 10) {
+        if (payload.aadhar_number && payload.aadhar_number !== "Not Found" && payload.aadhar_number.replace(/\s/g, '').length === 12) {
             const [rows] = await pool.execute(
                 'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
@@ -201,13 +218,13 @@ async function insertOrUpdateAadhaar({
             const insertSql = `
                 INSERT INTO wh_aadhar_records (
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
-                    dob, gender_english, gender_hindi, father_name_english, father_name_hindi,
+                    dob, gender_english, gender_hindi, relation_status, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
                     pincode, raw_json, tokens_prompt, tokens_completion, tokens_total, ai_model,
                     accuracy_overall, accuracy_aadhaar_number, accuracy_name_english,
                     accuracy_name_hindi, accuracy_dob, accuracy_pincode,
                     sender_mobile, receiver_mobile, front_image_uri, back_image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
@@ -219,6 +236,7 @@ async function insertOrUpdateAadhaar({
                 payload.dob,
                 payload.gender_english,
                 payload.gender_hindi,
+                payload.relation_status,
                 payload.father_name_english,
                 payload.father_name_hindi,
                 payload.husband_name_english,
@@ -304,7 +322,13 @@ async function insertOrUpdateAadhaar({
             updateParams.push(payload.gender_hindi);
         }
 
-        // 7. Father's Name (Always save if present in scan)
+        // 7. Relation Status
+        if (payload.relation_status) {
+            updateClauses.push('`relation_status` = ?');
+            updateParams.push(payload.relation_status);
+        }
+
+        // 8. Father's Name (Always save if present in scan)
         if (payload.father_name_english) {
             updateClauses.push('`father_name_english` = ?');
             updateParams.push(payload.father_name_english);
@@ -314,7 +338,7 @@ async function insertOrUpdateAadhaar({
             updateParams.push(payload.father_name_hindi);
         }
 
-        // 8. Husband's Name (Always save if present in scan)
+        // 9. Husband's Name (Always save if present in scan)
         if (payload.husband_name_english) {
             updateClauses.push('`husband_name_english` = ?');
             updateParams.push(payload.husband_name_english);
@@ -371,6 +395,7 @@ async function insertOrUpdateAadhaar({
                                 "fullName_Hindi": mergedNameHin,
                                 "dob": mergedDob,
                                 "gender": mergedGender,
+                                "relation_status": payload.relation_status || existing.relation_status || "",
                                 "fatherName_English": mergedFatherEng,
                                 "fatherName_Hindi": mergedFatherHin,
                                 "husbandName_English": mergedHusbandEng,

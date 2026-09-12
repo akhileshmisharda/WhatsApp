@@ -120,9 +120,10 @@ Strict Rules:
 4. AADHAAR NUMBER ACCURACY: 
    - On the FRONT side, extract the clean 12-digit Aadhaar number (XXXX XXXX XXXX).
    - On the BACK side, Aadhaar numbers are NOT printed (only helpline numbers like 1947, 1800-xxx or barcodes exist). NEVER extract toll-free numbers, PIN codes, or barcode digits as Aadhaar number. On the back side, ALWAYS set 'aadhaarNumber': "".
-5. FATHER VS HUSBAND NAME:
-   - S/O, D/O, C/O, Care of, Son of, Daughter of, आत्मज, सुपुत्र, पुत्र, सुपुत्री, पिता -> Extract the person's name into fatherName_English & fatherName_Hindi. Leave husbandName empty ("").
-   - W/O, Wife of, पत्नी, भार्या -> Extract the husband's name into husbandName_English & husbandName_Hindi. Leave fatherName empty ("").
+5. FATHER VS HUSBAND NAME & RELATION STATUS:
+   - Identify relation_status as one of: "W/O" (Wife of / पत्नी), "S/O" (Son of / आत्मज / पुत्र), "D/O" (Daughter of / सुपुत्री), "C/O" (Care of / संरक्षक).
+   - If relation is W/O / पत्नी / भार्या: Extract the husband's name into BOTH husbandName_English AND husbandName_Hindi (transliterate if only one language is printed). Leave fatherName fields empty ("").
+   - If relation is S/O, D/O, C/O, आत्मज, सुपुत्र, पुत्र, सुपुत्री, पिता: Extract the father/guardian's name into BOTH fatherName_English AND fatherName_Hindi (transliterate if only one language is printed). Leave husbandName fields empty ("").
 6. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling or names.
 7. ZERO FABRICATION: If a field is missing or unreadable, set it to empty string "". Never guess digits or dates.
 8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only.
@@ -143,6 +144,7 @@ Strict Rules:
             "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or empty string",
             "dob": "DD/MM/YYYY or YYYY or empty string",
             "gender": "MALE, FEMALE, पुरुष, महिला or empty string",
+            "relation_status": "W/O, S/O, D/O, or C/O or empty string",
             "fatherName_English": "Father/Care-of Name in English if listed after S/O, D/O, C/O, आत्मज, सुपुत्र, पुत्र. Leave empty if W/O/पत्नी.",
             "fatherName_Hindi": "Father/Care-of Name in Hindi (Devanagari) if listed after आत्मज, सुपुत्र, पुत्र, S/O, D/O, C/O. Leave empty if W/O/पत्नी.",
             "husbandName_English": "Husband Name in English if listed after W/O (Wife of) or पत्नी. Leave empty if S/O/D/O/C/O/आत्मज.",
@@ -285,7 +287,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     pincode: cardData.pincode_accuracy || 100
                 },
                 data: {
-                    aadharNumber: (detectedSide !== "back" && cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.startsWith("1947") && !cardData.aadhaarNumber.startsWith("1800")) ? cardData.aadhaarNumber : "Not Found",
+                    aadharNumber: (detectedSide !== "back" && cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.includes("1947") && !cardData.aadhaarNumber.includes("1800")) ? cardData.aadhaarNumber : "Not Found",
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
                     nameEnglish: cardData.fullName_English || "Not Found",
                     nameHindi: cardData.fullName_Hindi || "Not Found",
@@ -293,6 +295,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     gender: cardData.gender || "Not Found",
                     genderEnglish: cardData.gender || "Not Found",
                     genderHindi: cardData.gender_hindi || "Not Found",
+                    relationStatus: cardData.relation_status || (cardData.husbandName_English || cardData.husbandName_Hindi ? "W/O" : ((cardData.fatherName_English || cardData.fatherName_Hindi) ? "S/O" : "Not Found")),
                     fatherNameEnglish: cardData.fatherName_English || "Not Found",
                     fatherNameHindi: cardData.fatherName_Hindi || "Not Found",
                     husbandNameEnglish: cardData.husbandName_English || "Not Found",

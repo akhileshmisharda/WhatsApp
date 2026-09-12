@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.1-GEMINI-REST-FIX";
+const APP_VERSION = "v4.9.2-A-COMMAND-RELATION-FIX";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -330,8 +330,8 @@ async function startBot() {
                 }
 
                 // Allow self-messages ONLY if sending Aadhaar/PAN image or "hi"
-                const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
-                const isPanTag = captionText.includes("pan");
+                const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
+                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
 
                 if (msg.key.fromMe) {
@@ -351,7 +351,7 @@ async function startBot() {
                     continue;
                 }
 
-                // 2. Document Processing (ONLY if caption has aadhar or pan)
+                // 2. Document Processing (ONLY if caption has aadhar/a or pan/p)
                 if (!isAadhaarTag && !isPanTag) {
                     continue;
                 }
@@ -392,10 +392,10 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
         `🔖 *Build Version:* \`${APP_VERSION}\`\n\n` +
         `Send your document images with the appropriate caption to extract data & save automatically:\n\n` +
         `🪪 *Aadhaar Card:*\n` +
-        `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n` +
-        `• *Extracted:* Name (Eng/Hindi), DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
+        `• Send image with caption *\`a\`* or *\`aadhar\`*\n` +
+        `• *Extracted:* Name (Eng/Hindi), Relation (W/O, S/O), Father/Husband Name, DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
         `💳 *PAN Card:*\n` +
-        `• Send image with caption *\`pan\`*\n` +
+        `• Send image with caption *\`p\`* or *\`pan\`*\n` +
         `• *Extracted:* Name, Father's Name, DOB, PAN No\n\n` +
         `⚡ _Powered by FabKraft - AI_`;
 
@@ -460,6 +460,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             dob: details.dob,
             genderEnglish: details.genderEnglish,
             genderHindi: details.genderHindi,
+            relationStatus: details.relationStatus,
             fatherNameEnglish: details.fatherNameEnglish,
             fatherNameHindi: details.fatherNameHindi,
             husbandNameEnglish: details.husbandNameEnglish,
@@ -487,6 +488,9 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
 
         let relationLine = "";
+        if (details.relationStatus && details.relationStatus !== "Not Found") {
+            relationLine += `🔗 *Relation Status:* ${details.relationStatus}\n`;
+        }
         if (details.fatherNameEnglish && details.fatherNameEnglish !== "Not Found") {
             relationLine += `👨 *Father's Name (English):* ${details.fatherNameEnglish}\n`;
         }

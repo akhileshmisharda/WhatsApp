@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS `wh_aadhar_records` (
     `dob` VARCHAR(20) DEFAULT NULL COMMENT 'DOB or YOB (DD/MM/YYYY or YYYY)',
     `gender_english` VARCHAR(20) DEFAULT NULL,
     `gender_hindi` VARCHAR(50) DEFAULT NULL,
+    `relation_status` VARCHAR(50) DEFAULT NULL COMMENT 'W/O, S/O, D/O, or C/O',
     `father_name_english` VARCHAR(255) DEFAULT NULL,
     `father_name_hindi` VARCHAR(255) DEFAULT NULL,
     `husband_name_english` VARCHAR(255) DEFAULT NULL,
