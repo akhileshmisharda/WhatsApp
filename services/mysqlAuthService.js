@@ -2,26 +2,37 @@ const { proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const pool = require('./db');
 
 /**
- * Custom MySQL Auth State store for Baileys
- * Stores authentication keys and credentials inside `wh_baileys_auth` table in GoDaddy MySQL.
+ * High-performance MySQL Auth State with In-Memory Cache & Batch Fetching
  */
 async function useMySQLAuthState() {
+    const memoryCache = new Map();
+
     const writeData = async (id, data) => {
-        const jsonStr = JSON.stringify(data, BufferJSON.replacer);
-        await pool.execute(
-            `INSERT INTO wh_baileys_auth (id, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-            [id, jsonStr]
-        );
+        try {
+            memoryCache.set(id, data);
+            const jsonStr = JSON.stringify(data, BufferJSON.replacer);
+            await pool.execute(
+                `INSERT INTO wh_baileys_auth (id, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+                [id, jsonStr]
+            );
+        } catch (error) {
+            console.error(`[MySQLAuth] Error saving key ${id}:`, error.message);
+        }
     };
 
     const readData = async (id) => {
+        if (memoryCache.has(id)) {
+            return memoryCache.get(id);
+        }
         try {
             const [rows] = await pool.execute(
                 `SELECT value FROM wh_baileys_auth WHERE id = ?`,
                 [id]
             );
             if (rows.length > 0) {
-                return JSON.parse(rows[0].value, BufferJSON.reviver);
+                const parsed = JSON.parse(rows[0].value, BufferJSON.reviver);
+                memoryCache.set(id, parsed);
+                return parsed;
             }
             return null;
         } catch (error) {
@@ -31,6 +42,7 @@ async function useMySQLAuthState() {
     };
 
     const removeData = async (id) => {
+        memoryCache.delete(id);
         try {
             await pool.execute(`DELETE FROM wh_baileys_auth WHERE id = ?`, [id]);
         } catch (error) {
@@ -38,7 +50,7 @@ async function useMySQLAuthState() {
         }
     };
 
-    // 1. Fetch or initialize credentials
+    // 1. Fetch initial credentials
     const creds = (await readData('creds')) || initAuthCreds();
 
     return {
@@ -47,15 +59,55 @@ async function useMySQLAuthState() {
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    await Promise.all(
-                        ids.map(async (id) => {
-                            let value = await readData(`${type}-${id}`);
-                            if (type === 'app-state-sync-key' && value) {
-                                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                    const missingFromCache = [];
+
+                    // Check in-memory cache first (0ms latency)
+                    for (const id of ids) {
+                        const key = `${type}-${id}`;
+                        if (memoryCache.has(key)) {
+                            let val = memoryCache.get(key);
+                            if (type === 'app-state-sync-key' && val) {
+                                val = proto.Message.AppStateSyncKeyData.fromObject(val);
                             }
-                            data[id] = value;
-                        })
-                    );
+                            data[id] = val;
+                        } else {
+                            missingFromCache.push(id);
+                        }
+                    }
+
+                    // Fetch missing keys in a SINGLE batch SQL query instead of 50 separate queries
+                    if (missingFromCache.length > 0) {
+                        try {
+                            const keysToFetch = missingFromCache.map(id => `${type}-${id}`);
+                            const placeholders = keysToFetch.map(() => '?').join(',');
+                            const [rows] = await pool.query(
+                                `SELECT id, value FROM wh_baileys_auth WHERE id IN (${placeholders})`,
+                                keysToFetch
+                            );
+
+                            const fetchedMap = new Map();
+                            for (const row of rows) {
+                                fetchedMap.set(row.id, JSON.parse(row.value, BufferJSON.reviver));
+                            }
+
+                            for (const id of missingFromCache) {
+                                const key = `${type}-${id}`;
+                                let val = fetchedMap.get(key) || null;
+                                memoryCache.set(key, val);
+                                if (type === 'app-state-sync-key' && val) {
+                                    val = proto.Message.AppStateSyncKeyData.fromObject(val);
+                                }
+                                data[id] = val;
+                            }
+                        } catch (err) {
+                            console.error(`[MySQLAuth] Batch fetch error for ${type}:`, err.message);
+                            // Fallback to null for missing
+                            for (const id of missingFromCache) {
+                                data[id] = null;
+                            }
+                        }
+                    }
+
                     return data;
                 },
                 set: async (data) => {
@@ -82,4 +134,3 @@ async function useMySQLAuthState() {
 }
 
 module.exports = { useMySQLAuthState };
-
