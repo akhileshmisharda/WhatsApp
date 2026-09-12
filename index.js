@@ -18,12 +18,17 @@ const {
 const pool = require('./services/db');
 const { useMySQLAuthState } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
-const { logImageUpload } = require('./services/documentDbService');
+const { extractAadhaarWithGemini, extractPanWithGemini } = require('./services/geminiVisionService');
+const {
+    logImageUpload,
+    insertOrUpdateAadhaar,
+    insertOrUpdatePan
+} = require('./services/documentDbService');
 
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v3.2.0-PROD";
+const APP_VERSION = "v4.1.0-FABKRAFT-AI";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -54,8 +59,9 @@ app.use(express.json());
 
 app.get('/', (req, res) => {
     res.json({
-        service: 'Fabkraft WhatsApp Document Uploader',
+        service: 'Fabkraft WhatsApp Document AI & Uploader',
         version: APP_VERSION,
+        ai_engine: 'Powered by FabKraft - AI',
         server_status: 'online',
         whatsapp_status: connectionStatus,
         bot_number: currentBotNumber,
@@ -141,7 +147,7 @@ async function getActualPhoneNumber(senderJid, msg) {
         return msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
     }
 
-    // Case 3: WhatsApp LID (Linked Identity Device ID) -> Look up mapped phone number in MySQL
+    // Case 3: WhatsApp LID -> Look up mapped phone number in MySQL
     if (senderJid.endsWith('@lid')) {
         const lidId = senderJid.split('@')[0].replace(/[^0-9]/g, "");
         try {
@@ -318,12 +324,12 @@ async function startBot() {
                 const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
 
-                // 1. Prevent bot infinite reply loops
-                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *')) {
+                // Prevent bot infinite reply loops
+                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *') || text.startsWith('🪪 *') || text.startsWith('💳 *')) {
                     continue;
                 }
 
-                // 2. Allow self-messages (from 9610238234) ONLY if sending Aadhaar/PAN image or "hi"
+                // Allow self-messages ONLY if sending Aadhaar/PAN image or "hi"
                 const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = captionText.includes("pan");
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
@@ -336,16 +342,16 @@ async function startBot() {
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg);
 
-                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage} | FromMe: ${msg.key.fromMe}`);
+                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
 
-                // 3. Strict Explicit Greeting only (Must be exactly 'hi', 'hello', 'menu', 'help', 'start')
+                // 1. Strict Greeting only
                 if (isExactGreeting && !isImage) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg);
                     continue;
                 }
 
-                // If image has no aadhar/pan caption, DO NOTHING (silent)
+                // 2. Document Processing (ONLY if caption has aadhar or pan)
                 if (!isAadhaarTag && !isPanTag) {
                     continue;
                 }
@@ -366,9 +372,9 @@ async function startBot() {
                 }
 
                 if (isImage && isAadhaarTag) {
-                    await handleDirectUpload(sock, targetMsgObj, senderJid, senderMobile, 'Aadhar Card', 'aadhar', quotedRef);
+                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef);
                 } else if (isImage && isPanTag) {
-                    await handleDirectUpload(sock, targetMsgObj, senderJid, senderMobile, 'PAN Card', 'pan', quotedRef);
+                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef);
                 }
             }
         } catch (err) {
@@ -382,27 +388,28 @@ async function startBot() {
  */
 async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
-        `👋 *Welcome to Fabkraft Document Uploader!*\n` +
+        `👋 *Welcome to Fabkraft Document Assistant!*\n` +
         `🔖 *Build Version:* \`${APP_VERSION}\`\n\n` +
-        `Send your document images with the appropriate caption to upload directly to Fabkraft ERP:\n\n` +
+        `Send your document images with the appropriate caption to extract data & save automatically:\n\n` +
         `🪪 *Aadhaar Card:*\n` +
-        `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n\n` +
+        `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n` +
+        `• *Extracted:* Name (Eng/Hindi), DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
         `💳 *PAN Card:*\n` +
-        `• Send image with caption *\`pan\`*\n\n` +
-        `🌐 *Storage:* All files are stored at \`fabkraft.in/WhatsAppFolder/uploads/\` and saved with an Upload ID.\n\n` +
-        `_Active on Google Cloud Run_`;
+        `• Send image with caption *\`pan\`*\n` +
+        `• *Extracted:* Name, Father's Name, DOB, PAN No\n\n` +
+        `⚡ _Powered by FabKraft - AI_`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
 
 /**
- * Handles Direct Image Upload & Database Logging in wh_uploads
+ * Handles Aadhaar Upload + Gemini 1.5 Flash Structured AI Extraction
  */
-async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, docTitle, category, quotedRef = null) {
-    logEvent("UPLOAD_START", `Uploading ${docTitle} from ${senderMobile}...`);
+async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
+    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini Flash for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: `⏳ *${docTitle} detected! Uploading directly to Fabkraft server...*`
+        text: `⏳ *Aadhaar Card detected! Extracting details and saving...*`
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -414,56 +421,157 @@ async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, doc
         );
 
         const timestamp = Date.now();
-        const fileName = `${category}_${senderMobile}_${timestamp}.jpg`;
+        const fileName = `aadhar_${senderMobile}_${timestamp}.jpg`;
 
-        // 1. Upload file buffer to fabkraft.in/WhatsAppFolder/uploads/<category>/
-        const uploadResult = await uploadToFabkraft(buffer, fileName, category);
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini 1.5 Flash
+        const [uploadResult, geminiResult] = await Promise.all([
+            uploadToFabkraft(buffer, fileName, 'aadhar'),
+            extractAadhaarWithGemini(buffer)
+        ]);
 
         if (!uploadResult.success) {
-            logEvent("UPLOAD_FAILED", `Upload failed for ${senderMobile}: ${uploadResult.error}`);
-            await sock.sendMessage(replyJid, {
-                text: `❌ *Upload Failed:* ${uploadResult.error || 'Server error'}. Please try again.`
-            }, { quoted: quotedRef || imageMsgObj });
-            return;
+            throw new Error(`Server upload failed: ${uploadResult.error}`);
         }
 
         const uploadUri = uploadResult.uploadUri;
+        const details = geminiResult.data || {};
 
         // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
-            imageCaption: docTitle,
-            imageId: String(uploadIdAutoId(timestamp)),
+            imageCaption: 'Aadhar Card',
+            imageId: details.aadharNumber || `DOC${timestamp.toString().slice(-6)}`,
             uploadUri: uploadUri
         });
 
-        // 3. Format current date & time (IST)
-        const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+        // 3. Upsert into wh_aadhar_records
+        if (details.aadharNumber && details.aadharNumber !== "Not Found") {
+            await insertOrUpdateAadhaar({
+                uploadId,
+                aadharNumber: details.aadharNumber,
+                virtualId: details.vidNumber,
+                nameEnglish: details.nameEnglish,
+                nameHindi: details.nameHindi,
+                dob: details.dob,
+                genderEnglish: details.genderEnglish,
+                genderHindi: details.genderHindi,
+                addressEnglish: details.addressEnglish,
+                addressHindi: details.addressHindi,
+                pincode: details.pincode,
+                senderMobile: senderMobile,
+                receiverMobile: currentBotNumber,
+                uploadUri: uploadUri
+            });
+        }
+
+        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
 
         const replyText = 
-            `✅ *${docTitle.toUpperCase()} UPLOADED SUCCESSFULLY*\n\n` +
+            `🪪 *AADHAAR EXTRACTED & SAVED*\n\n` +
             `🆔 *Upload ID:* #${uploadId}\n` +
-            `📁 *Document Type:* ${docTitle}\n` +
             `📱 *Bot Account:* ${currentBotNumber}\n` +
-            `📲 *Sent By:* ${senderMobile}\n` +
-            `📅 *Uploaded At:* ${dateStr}\n` +
-            `🔖 *Version:* \`${APP_VERSION}\`\n\n` +
-            `🌐 *Server Link:*\n${uploadUri}`;
+            `📲 *Sent By:* ${senderMobile}\n\n` +
+            `👤 *Name (English):* ${displayVal(details.nameEnglish)}\n` +
+            `👤 *Name (Hindi):* ${displayVal(details.nameHindi)}\n` +
+            `📅 *DOB / YOB:* ${displayVal(details.dob)}\n` +
+            `🚻 *Gender:* ${displayVal(details.genderEnglish)}\n` +
+            `🔢 *Aadhaar Number:* ${displayVal(details.aadharNumber)}\n` +
+            `🔢 *Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
+            `🏠 *Address:* ${displayVal(details.addressEnglish)}\n` +
+            `📮 *PIN Code:* ${displayVal(details.pincode)}\n\n` +
+            `⚡ _Powered by FabKraft - AI_`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
-        logEvent("UPLOAD_SUCCESS", `${docTitle} uploaded with ID #${uploadId} for ${senderMobile}`, { uploadUri });
+        logEvent("AADHAAR_SUCCESS", `Aadhaar processed with ID #${uploadId} for ${senderMobile}`);
 
     } catch (err) {
-        logEvent("UPLOAD_ERROR", `Failed to upload for ${senderMobile}: ${err.message}`);
+        logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
-            text: `❌ *Failed to upload ${docTitle}.* Please try again.`
+            text: `❌ *Processing Failed:* ${err.message}. Please try again.`
         }, { quoted: quotedRef || imageMsgObj });
     }
 }
 
-function uploadIdAutoId(ts) {
-    return `DOC${ts.toString().slice(-6)}`;
+/**
+ * Handles PAN Upload + Gemini 1.5 Flash Structured AI Extraction
+ */
+async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
+    logEvent("PAN_START", `Processing PAN with Gemini Flash for ${senderMobile}...`);
+
+    await sock.sendMessage(replyJid, {
+        text: `⏳ *PAN Card detected! Extracting details and saving...*`
+    }, { quoted: quotedRef || imageMsgObj });
+
+    try {
+        const buffer = await downloadMediaMessage(
+            imageMsgObj,
+            'buffer',
+            {},
+            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
+        );
+
+        const timestamp = Date.now();
+        const fileName = `pan_${senderMobile}_${timestamp}.jpg`;
+
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini 1.5 Flash
+        const [uploadResult, geminiResult] = await Promise.all([
+            uploadToFabkraft(buffer, fileName, 'pan'),
+            extractPanWithGemini(buffer)
+        ]);
+
+        if (!uploadResult.success) {
+            throw new Error(`Server upload failed: ${uploadResult.error}`);
+        }
+
+        const uploadUri = uploadResult.uploadUri;
+        const details = geminiResult.data || {};
+
+        // 2. Insert record into wh_uploads
+        const uploadId = await logImageUpload({
+            receiverMobile: currentBotNumber,
+            senderMobile: senderMobile,
+            imageCaption: 'PAN Card',
+            imageId: details.panNumber || `DOC${timestamp.toString().slice(-6)}`,
+            uploadUri: uploadUri
+        });
+
+        // 3. Upsert into wh_pan_records
+        if (details.panNumber && details.panNumber !== "Not Found") {
+            await insertOrUpdatePan({
+                uploadId,
+                panNumber: details.panNumber,
+                name: details.name,
+                fatherName: details.fatherName,
+                dob: details.dob,
+                senderMobile: senderMobile,
+                receiverMobile: currentBotNumber,
+                uploadUri: uploadUri
+            });
+        }
+
+        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+
+        const replyText = 
+            `💳 *PAN CARD EXTRACTED & SAVED*\n\n` +
+            `🆔 *Upload ID:* #${uploadId}\n` +
+            `📱 *Bot Account:* ${currentBotNumber}\n` +
+            `📲 *Sent By:* ${senderMobile}\n\n` +
+            `👤 *Name:* ${displayVal(details.name)}\n` +
+            `👨 *Father's Name:* ${displayVal(details.fatherName)}\n` +
+            `📅 *Date of Birth:* ${displayVal(details.dob)}\n` +
+            `🔢 *PAN Number:* ${displayVal(details.panNumber)}\n\n` +
+            `⚡ _Powered by FabKraft - AI_`;
+
+        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
+        logEvent("PAN_SUCCESS", `PAN processed with ID #${uploadId} for ${senderMobile}`);
+
+    } catch (err) {
+        logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        await sock.sendMessage(replyJid, {
+            text: `❌ *Processing Failed:* ${err.message}. Please try again.`
+        }, { quoted: quotedRef || imageMsgObj });
+    }
 }
 
 // Start WhatsApp Bot
