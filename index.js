@@ -18,13 +18,7 @@ const {
 const pool = require('./services/db');
 const { useMySQLAuthState } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
-const { extractAadhaarDetails } = require('./services/visionService');
-const { extractPanDetails } = require('./services/panvisionService');
-const {
-    logImageUpload,
-    insertOrUpdateAadhaar,
-    insertOrUpdatePan
-} = require('./services/documentDbService');
+const { logImageUpload } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
 // 1. STATE & EVENT LOGS
@@ -58,7 +52,7 @@ app.use(express.json());
 
 app.get('/', (req, res) => {
     res.json({
-        service: 'Fabkraft WhatsApp ERP Document Parser',
+        service: 'Fabkraft WhatsApp Document Uploader',
         server_status: 'online',
         whatsapp_status: connectionStatus,
         bot_number: currentBotNumber,
@@ -108,8 +102,7 @@ app.get('/send-test', async (req, res) => {
         logEvent("OUTGOING_ERROR", `Failed to send to ${targetMobile}: ${err.message}`);
         res.status(500).json({
             success: false,
-            error: err.message,
-            stack: err.stack
+            error: err.message
         });
     }
 });
@@ -244,7 +237,7 @@ async function startBot() {
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
-            // STRICT PROTECTION 1: Ignore all background history sync and offline dumps!
+            // Ignore offline history sync dumps
             if (type !== "notify") return;
 
             const nowSeconds = Math.floor(Date.now() / 1000);
@@ -252,13 +245,13 @@ async function startBot() {
             for (const msg of messages) {
                 if (!msg.message) continue;
 
-                // STRICT PROTECTION 2: Never reply to self
+                // Never reply to self
                 if (msg.key.fromMe) continue;
 
                 const senderJid = msg.key.remoteJid;
                 if (!senderJid) continue;
 
-                // STRICT PROTECTION 3: NEVER touch groups, broadcasts, newsletters
+                // NEVER touch groups, broadcasts, newsletters
                 if (
                     senderJid.endsWith('@g.us') || 
                     senderJid.endsWith('@broadcast') || 
@@ -268,7 +261,7 @@ async function startBot() {
                     continue;
                 }
 
-                // STRICT PROTECTION 4: Ignore any message older than 10 seconds (discards buffer backlog)
+                // Ignore messages older than 10 seconds
                 const msgTimestamp = typeof msg.messageTimestamp === 'number' 
                     ? msg.messageTimestamp 
                     : (msg.messageTimestamp?.low || 0);
@@ -291,9 +284,14 @@ async function startBot() {
                     continue;
                 }
 
-                // 2. Document Tag Detection
+                // 2. Document Tag Detection (ONLY process if caption has aadhar or pan)
                 const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = captionText.includes("pan");
+
+                // If image has no aadhar/pan caption, DO NOTHING (silent)
+                if (!isAadhaarTag && !isPanTag) {
+                    continue;
+                }
 
                 let targetMsgObj = msg;
                 let quotedRef = null;
@@ -311,15 +309,10 @@ async function startBot() {
                 }
 
                 if (isImage && isAadhaarTag) {
-                    await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, text, quotedRef);
+                    await handleDirectUpload(sock, targetMsgObj, senderJid, senderMobile, 'Aadhar Card', 'aadhar', quotedRef);
                 } else if (isImage && isPanTag) {
-                    await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, text, quotedRef);
-                } else if (isImage && !isAadhaarTag && !isPanTag) {
-                    await sock.sendMessage(senderJid, {
-                        text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
-                    }, { quoted: msg });
+                    await handleDirectUpload(sock, targetMsgObj, senderJid, senderMobile, 'PAN Card', 'pan', quotedRef);
                 }
-                // (Zero automatic fallback response for random text messages!)
             }
         } catch (err) {
             logEvent("MESSAGE_UPSERT_ERROR", err.message);
@@ -332,32 +325,25 @@ async function startBot() {
  */
 async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
-        `👋 *Welcome to Fabkraft Document Assistant!*\n\n` +
-        `Here is how you can process your documents automatically:\n\n` +
-        `🪪 *1. Aadhaar Card Processing:*\n` +
-        `• Send an image of your Aadhaar Card with the caption *\`aadhar\`* or *\`adhar\`*.\n` +
-        `• Or reply to any sent Aadhaar photo with *\`aadhar\`*.\n` +
-        `• *Extracted:* Name (English & Hindi), DOB, Gender, Aadhaar Number, VID, Address & PIN code.\n\n` +
-        `💳 *2. PAN Card Processing:*\n` +
-        `• Send an image of your PAN Card with the caption *\`pan\`*.\n` +
-        `• Or reply to any sent PAN photo with *\`pan\`*.\n` +
-        `• *Extracted:* Name, Father's Name, DOB, PAN Number.\n\n` +
-        `🌐 *Uploads & Storage:*\n` +
-        `• All images are automatically stored at: \`fabkraft.in/WhatsAppFolder/uploads/\`\n` +
-        `• All data records are saved in MySQL database with \`wh_\` tables.\n\n` +
-        `_Send your image or type *hi* anytime!_`;
+        `👋 *Welcome to Fabkraft Document Uploader!*\n\n` +
+        `Send your document images with the appropriate caption to upload directly to Fabkraft ERP:\n\n` +
+        `🪪 *Aadhaar Card:*\n` +
+        `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n\n` +
+        `💳 *PAN Card:*\n` +
+        `• Send image with caption *\`pan\`*\n\n` +
+        `🌐 *Storage:* All files are stored at \`fabkraft.in/WhatsAppFolder/uploads/\` and saved with an Upload ID.`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
 
 /**
- * Handles Aadhaar Card Image Detection, OCR, Fabkraft Upload, & Database Logging
+ * Handles Direct Image Upload (No OCR) & Database Logging in wh_uploads
  */
-async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, userCaption, quotedRef = null) {
-    logEvent("AADHAAR_START", `Processing Aadhaar for ${senderMobile}`);
+async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, docTitle, category, quotedRef = null) {
+    logEvent("UPLOAD_START", `Uploading ${docTitle} from ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: "⏳ *Aadhaar image detected! Processing OCR and uploading to Fabkraft...*"
+        text: `⏳ *${docTitle} detected! Uploading directly to Fabkraft server...*`
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -368,156 +354,47 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
             { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
         );
 
-        // 1. OCR Extraction
-        const extracted = await extractAadhaarDetails(buffer);
+        const timestamp = Date.now();
+        const fileName = `${category}_${senderMobile}_${timestamp}.jpg`;
 
-        if (extracted.aadharNumber === "Not Found") {
-            await sock.sendMessage(replyJid, {
-                text: "⚠️ *Aadhaar Number could not be detected.* Please send a clearer, un-cropped image."
-            }, { quoted: quotedRef || imageMsgObj });
-            return;
-        }
+        // 1. Upload file buffer to fabkraft.in/WhatsAppFolder/uploads/<category>/
+        const uploadResult = await uploadToFabkraft(buffer, fileName, category);
+        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/${category}/${fileName}`;
 
-        const cleanAadhaar = extracted.aadharNumber.replace(/\s+/g, "");
-        const fileName = `aadhar_${cleanAadhaar}_${Date.now()}.jpg`;
-
-        // 2. Upload directly to fabkraft.in/WhatsAppFolder/uploads/aadhar/
-        const uploadResult = await uploadToFabkraft(buffer, fileName, 'aadhar');
-        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/aadhar/${fileName}`;
-
-        // 3. Insert into wh_uploads
+        // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
-            imageCaption: userCaption || 'Aadhar Card',
-            imageId: extracted.aadharNumber,
+            imageCaption: docTitle,
+            imageId: String(uploadIdAutoId(timestamp)),
             uploadUri: uploadUri
         });
 
-        // 4. Upsert into wh_aadhar_records
-        const dbResult = await insertOrUpdateAadhaar({
-            uploadId,
-            aadharNumber: extracted.aadharNumber,
-            virtualId: extracted.vidNumber,
-            nameEnglish: extracted.nameEnglish,
-            nameHindi: extracted.nameHindi,
-            dob: extracted.dob,
-            genderEnglish: extracted.genderEnglish,
-            genderHindi: extracted.genderHindi,
-            addressEnglish: extracted.addressEnglish,
-            addressHindi: extracted.addressHindi,
-            pincode: extracted.pincode,
-            senderMobile: senderMobile,
-            receiverMobile: currentBotNumber,
-            uploadUri: uploadUri
-        });
-
-        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Available";
+        // 3. Format current date & time (IST)
+        const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
         const replyText = 
-            `🪪 *AADHAAR PROCESSED & SAVED*\n\n` +
-            `📦 *Database Status:* ${dbResult.action.toUpperCase()}\n` +
-            `📱 *QR Bot Account:* ${currentBotNumber}\n` +
-            `📲 *Sent By:* ${senderMobile}\n\n` +
-            `👤 *Name (English):* ${displayVal(extracted.nameEnglish)}\n` +
-            `👤 *Name (Hindi):* ${displayVal(extracted.nameHindi)}\n` +
-            `📅 *DOB / YOB:* ${displayVal(extracted.dob)}\n` +
-            `🚻 *Gender:* ${displayVal(extracted.genderEnglish)}\n` +
-            `🔢 *Aadhaar Number:* ${displayVal(extracted.aadharNumber)}\n` +
-            `🔢 *Virtual ID (VID):* ${displayVal(extracted.vidNumber)}\n` +
-            `🏠 *Address:* ${displayVal(extracted.addressEnglish)}\n` +
-            `📮 *PIN Code:* ${displayVal(extracted.pincode)}\n\n` +
-            `🌐 *Uploaded File URI:*\n${uploadUri}`;
+            `✅ *${docTitle.toUpperCase()} UPLOADED SUCCESSFULLY*\n\n` +
+            `🆔 *Upload ID:* #${uploadId}\n` +
+            `📁 *Document Type:* ${docTitle}\n` +
+            `📱 *Bot Account:* ${currentBotNumber}\n` +
+            `📲 *Sent By:* ${senderMobile}\n` +
+            `📅 *Uploaded At:* ${dateStr}\n\n` +
+            `🌐 *Server Link:*\n${uploadUri}`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
-        logEvent("AADHAAR_COMPLETE", `Aadhaar flow completed for ${senderMobile}`, { aadharNumber: extracted.aadharNumber });
+        logEvent("UPLOAD_SUCCESS", `${docTitle} uploaded with ID #${uploadId} for ${senderMobile}`);
 
     } catch (err) {
-        logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        logEvent("UPLOAD_ERROR", `Failed to upload for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
-            text: "❌ *Failed to process Aadhaar card details.*"
+            text: `❌ *Failed to upload ${docTitle}.* Please try again.`
         }, { quoted: quotedRef || imageMsgObj });
     }
 }
 
-/**
- * Handles PAN Card Image Detection, OCR, Fabkraft Upload, & Database Logging
- */
-async function handlePanFlow(sock, imageMsgObj, replyJid, senderMobile, userCaption, quotedRef = null) {
-    logEvent("PAN_START", `Processing PAN for ${senderMobile}`);
-
-    await sock.sendMessage(replyJid, {
-        text: "⏳ *PAN Card image detected! Processing OCR and uploading to Fabkraft...*"
-    }, { quoted: quotedRef || imageMsgObj });
-
-    try {
-        const buffer = await downloadMediaMessage(
-            imageMsgObj,
-            'buffer',
-            {},
-            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
-        );
-
-        // 1. OCR Extraction
-        const extracted = await extractPanDetails(buffer);
-
-        if (extracted.panNumber === "Not Found") {
-            await sock.sendMessage(replyJid, {
-                text: "⚠️ *PAN Number could not be detected.* Please send a clearer image."
-            }, { quoted: quotedRef || imageMsgObj });
-            return;
-        }
-
-        const cleanPan = extracted.panNumber.replace(/\s+/g, "");
-        const fileName = `pan_${cleanPan}_${Date.now()}.jpg`;
-
-        // 2. Upload directly to fabkraft.in/WhatsAppFolder/uploads/pan/
-        const uploadResult = await uploadToFabkraft(buffer, fileName, 'pan');
-        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/pan/${fileName}`;
-
-        // 3. Insert into wh_uploads
-        const uploadId = await logImageUpload({
-            receiverMobile: currentBotNumber,
-            senderMobile: senderMobile,
-            imageCaption: userCaption || 'Pan Card',
-            imageId: extracted.panNumber,
-            uploadUri: uploadUri
-        });
-
-        // 4. Upsert into wh_pan_records
-        const dbResult = await insertOrUpdatePan({
-            uploadId,
-            panNumber: extracted.panNumber,
-            name: extracted.name,
-            fatherName: extracted.fatherName,
-            dob: extracted.dob,
-            senderMobile: senderMobile,
-            receiverMobile: currentBotNumber,
-            uploadUri: uploadUri
-        });
-
-        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Available";
-
-        const replyText = 
-            `💳 *PAN CARD PROCESSED & SAVED*\n\n` +
-            `📦 *Database Status:* ${dbResult.action.toUpperCase()}\n` +
-            `📱 *QR Bot Account:* ${currentBotNumber}\n` +
-            `📲 *Sent By:* ${senderMobile}\n\n` +
-            `👤 *Name:* ${displayVal(extracted.name)}\n` +
-            `👨 *Father's Name:* ${displayVal(extracted.fatherName)}\n` +
-            `📅 *Date of Birth:* ${displayVal(extracted.dob)}\n` +
-            `🔢 *PAN Number:* ${displayVal(extracted.panNumber)}\n\n` +
-            `🌐 *Uploaded File URI:*\n${uploadUri}`;
-
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
-        logEvent("PAN_COMPLETE", `PAN flow completed for ${senderMobile}`, { panNumber: extracted.panNumber });
-
-    } catch (err) {
-        logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
-        await sock.sendMessage(replyJid, {
-            text: "❌ *Failed to process PAN card details.*"
-        }, { quoted: quotedRef || imageMsgObj });
-    }
+function uploadIdAutoId(ts) {
+    return `DOC${ts.toString().slice(-6)}`;
 }
 
 // Start WhatsApp Bot
