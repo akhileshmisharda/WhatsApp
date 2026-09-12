@@ -34,7 +34,6 @@ let currentBotNumber = "Unknown";
 let connectionStatus = "initializing";
 let lastConnectedAt = null;
 let lastQrGeneratedAt = null;
-const botStartTime = Math.floor(Date.now() / 1000);
 const eventLogs = [];
 
 function logEvent(type, message, data = null) {
@@ -245,41 +244,54 @@ async function startBot() {
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
+            // STRICT PROTECTION 1: Ignore all background history sync and offline dumps!
+            if (type !== "notify") return;
+
+            const nowSeconds = Math.floor(Date.now() / 1000);
+
             for (const msg of messages) {
                 if (!msg.message) continue;
 
-                // 1. Never reply to own messages
+                // STRICT PROTECTION 2: Never reply to self
                 if (msg.key.fromMe) continue;
 
                 const senderJid = msg.key.remoteJid;
-                if (!senderJid || senderJid === 'status@broadcast') continue;
+                if (!senderJid) continue;
 
-                // 2. NEVER reply to WhatsApp Groups
-                if (senderJid.endsWith('@g.us')) continue;
+                // STRICT PROTECTION 3: NEVER touch groups, broadcasts, newsletters
+                if (
+                    senderJid.endsWith('@g.us') || 
+                    senderJid.endsWith('@broadcast') || 
+                    senderJid.endsWith('@newsletter') ||
+                    senderJid === 'status@broadcast'
+                ) {
+                    continue;
+                }
 
-                // 3. Ignore old/historic synced messages (only process live messages)
+                // STRICT PROTECTION 4: Ignore any message older than 10 seconds (discards buffer backlog)
                 const msgTimestamp = typeof msg.messageTimestamp === 'number' 
                     ? msg.messageTimestamp 
                     : (msg.messageTimestamp?.low || 0);
-                if (msgTimestamp && msgTimestamp < (botStartTime - 5)) {
+
+                if (msgTimestamp && msgTimestamp < (nowSeconds - 10)) {
                     continue;
                 }
 
                 const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
-                const captionText = text.toLowerCase();
+                const captionText = text.trim().toLowerCase();
                 const senderMobile = senderJid.split('@')[0].replace(/[^0-9]/g, "");
 
-                logEvent("MESSAGE_IN", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
+                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
 
-                // 4. Explicit Greeting/Menu trigger only
-                const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
-                if (isGreetingOrMenu && !isImage) {
+                // 1. Strict Explicit Greeting only (Must be exactly 'hi', 'hello', 'menu', 'help', 'start')
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
+                if (isExactGreeting && !isImage) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg);
                     continue;
                 }
 
-                // 5. Document Tag Detection
+                // 2. Document Tag Detection
                 const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = captionText.includes("pan");
 
@@ -307,6 +319,7 @@ async function startBot() {
                         text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
                     }, { quoted: msg });
                 }
+                // (Zero automatic fallback response for random text messages!)
             }
         } catch (err) {
             logEvent("MESSAGE_UPSERT_ERROR", err.message);
