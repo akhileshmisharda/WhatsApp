@@ -27,7 +27,15 @@ const {
 } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
-// 1. EXPRESS HTTP SERVER (Mandatory for Cloud Run Port 8080)
+// 1. STATE & DIAGNOSTICS
+// ---------------------------------------------------------
+let currentBotNumber = "Unknown";
+let connectionStatus = "initializing";
+let lastConnectedAt = null;
+let lastQrGeneratedAt = null;
+
+// ---------------------------------------------------------
+// 2. EXPRESS HTTP SERVER (Cloud Run Health & Status)
 // ---------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -36,9 +44,12 @@ app.use(express.json());
 
 app.get('/', (req, res) => {
     res.json({
-        status: 'online',
         service: 'Fabkraft WhatsApp ERP Document Parser',
-        botNumber: currentBotNumber,
+        server_status: 'online',
+        whatsapp_status: connectionStatus,
+        bot_number: currentBotNumber,
+        last_connected: lastConnectedAt,
+        last_qr_generated: lastQrGeneratedAt,
         timestamp: new Date().toISOString()
     });
 });
@@ -50,12 +61,11 @@ app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------
-// 2. WHATSAPP BOT ENGINE
+// 3. WHATSAPP BOT ENGINE
 // ---------------------------------------------------------
-let currentBotNumber = "Unknown";
-
 async function startBot() {
     console.log("🚀 Initializing WhatsApp Socket with MySQL Auth State...");
+    connectionStatus = "connecting";
 
     let authState, saveCreds;
     try {
@@ -63,6 +73,12 @@ async function startBot() {
         authState = mySqlAuth.state;
         saveCreds = mySqlAuth.saveCreds;
         console.log("✅ Using MySQL-backed session storage (wh_baileys_auth)");
+
+        // Read saved bot number if present in credentials
+        if (authState?.creds?.me?.id) {
+            currentBotNumber = authState.creds.me.id.split(':')[0].replace(/[^0-9]/g, "");
+            console.log(`📱 Loaded existing bot credentials for: ${currentBotNumber}`);
+        }
     } catch (authErr) {
         console.warn("⚠️ MySQL Auth failed, falling back to local ./auth folder:", authErr.message);
         const fileAuth = await useMultiFileAuthState("./auth");
@@ -86,6 +102,8 @@ async function startBot() {
 
     sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
         if (qr) {
+            connectionStatus = "waiting_for_qr_scan";
+            lastQrGeneratedAt = new Date().toISOString();
             console.log("\n======================================");
             console.log("      PLEASE SCAN QR CODE BELOW       ");
             console.log("======================================\n");
@@ -93,7 +111,9 @@ async function startBot() {
         }
 
         if (connection === "open") {
-            currentBotNumber = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, "") : "Unknown";
+            connectionStatus = "connected";
+            lastConnectedAt = new Date().toISOString();
+            currentBotNumber = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, "") : currentBotNumber;
             console.log("\n======================================");
             console.log("✅ WhatsApp Connected Successfully!");
             console.log(`📱 QR Code Bot Mobile Number: ${currentBotNumber}`);
@@ -102,11 +122,13 @@ async function startBot() {
         }
 
         if (connection === "close") {
+            connectionStatus = "disconnected_reconnecting";
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log(`⚠️ Connection closed. Reconnecting: ${shouldReconnect}`);
             if (shouldReconnect) {
                 startBot();
             } else {
+                connectionStatus = "logged_out";
                 console.log("❌ Logged out. Resetting session credentials.");
             }
         }
@@ -150,7 +172,7 @@ async function startBot() {
 
                 const senderMobile = senderJid.split('@')[0].replace(/[^0-9]/g, "");
 
-                console.log(`\n📩 [Message Received] From: ${senderMobile} | Type: ${type} | Text: "${rawCaption}" | Image: ${isDirectImage || isQuotedImage}`);
+                console.log(`\n📩 [Message Received] From: ${senderMobile} | Text: "${rawCaption}" | Image: ${isDirectImage || isQuotedImage}`);
 
                 // 1. Menu / Greeting trigger
                 const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
