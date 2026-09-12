@@ -10,9 +10,14 @@ const httpsAgent = new https.Agent({
 let cachedGeminiKey = process.env.GEMINI_API_KEY || null;
 let lastKeyFetchTime = 0;
 
+const pool = require('./db');
+
 /**
- * Dynamically fetches the Gemini API key from https://fabkraft.in/get_gemini_key.php
- * Caches in memory for 5 minutes.
+ * Dynamically fetches the Gemini API key:
+ * 1. Checks memory cache
+ * 2. Tries https://fabkraft.in/get_gemini_key.php
+ * 3. Tries MySQL table `wh_baileys_auth` WHERE id = 'gemini_api_key'
+ * 4. Checks process.env.GEMINI_API_KEY
  */
 async function getGeminiApiKey() {
     const now = Date.now();
@@ -20,11 +25,12 @@ async function getGeminiApiKey() {
         return cachedGeminiKey;
     }
 
+    // 1. Try fetching from fabkraft.in/get_gemini_key.php
     try {
         console.log('🔑 [GeminiKey] Fetching API key from https://fabkraft.in/get_gemini_key.php...');
         const res = await axios.get('https://fabkraft.in/get_gemini_key.php', {
             httpsAgent,
-            timeout: 10000
+            timeout: 8000
         });
 
         let key = null;
@@ -34,14 +40,31 @@ async function getGeminiApiKey() {
             key = res.data.key || res.data.api_key || res.data.gemini_key || res.data.apiKey || Object.values(res.data)[0];
         }
 
-        if (key && typeof key === 'string' && key.trim().length > 5) {
+        // Validate that it looks like a valid key and not HTML error page
+        if (key && typeof key === 'string' && !key.includes('<html') && key.trim().length > 10) {
             cachedGeminiKey = key.trim();
             lastKeyFetchTime = now;
-            console.log(`✅ [GeminiKey] Successfully loaded dynamic key (Prefix: ${cachedGeminiKey.substring(0, 8)}...)`);
+            console.log(`✅ [GeminiKey] Successfully loaded dynamic key from HTTP (Prefix: ${cachedGeminiKey.substring(0, 6)}...)`);
             return cachedGeminiKey;
         }
     } catch (err) {
-        console.warn(`⚠️ [GeminiKey] Failed to fetch key from fabkraft.in:`, err.message);
+        console.warn(`⚠️ [GeminiKey] HTTP fetch failed:`, err.message);
+    }
+
+    // 2. Try fetching from MySQL table wh_baileys_auth
+    try {
+        const [rows] = await pool.execute(`SELECT value FROM wh_baileys_auth WHERE id = 'gemini_api_key' LIMIT 1`);
+        if (rows.length > 0 && rows[0].value) {
+            const dbKey = String(rows[0].value).trim();
+            if (dbKey.length > 10) {
+                cachedGeminiKey = dbKey;
+                lastKeyFetchTime = now;
+                console.log(`✅ [GeminiKey] Loaded key from MySQL (Prefix: ${cachedGeminiKey.substring(0, 6)}...)`);
+                return cachedGeminiKey;
+            }
+        }
+    } catch (dbErr) {
+        console.warn(`⚠️ [GeminiKey] MySQL lookup failed:`, dbErr.message);
     }
 
     return cachedGeminiKey || process.env.GEMINI_API_KEY || '';

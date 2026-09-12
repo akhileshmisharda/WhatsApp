@@ -403,10 +403,10 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
 }
 
 /**
- * Handles Aadhaar Upload + Gemini 1.5 Flash Structured AI Extraction
+ * Handles Aadhaar Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
  */
 async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini Flash for ${senderMobile}...`);
+    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini 3.1 Flash-Lite for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `⏳ *Aadhaar Card detected! Extracting details and saving...*`
@@ -494,10 +494,10 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
 }
 
 /**
- * Handles PAN Upload + Gemini 1.5 Flash Structured AI Extraction
+ * Handles PAN Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
  */
 async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("PAN_START", `Processing PAN with Gemini Flash for ${senderMobile}...`);
+    logEvent("PAN_START", `Processing PAN with Gemini 3.1 Flash-Lite for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `⏳ *PAN Card detected! Extracting details and saving...*`
