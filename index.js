@@ -38,6 +38,7 @@ app.get('/', (req, res) => {
     res.json({
         status: 'online',
         service: 'Fabkraft WhatsApp ERP Document Parser',
+        botNumber: currentBotNumber,
         timestamp: new Date().toISOString()
     });
 });
@@ -113,82 +114,84 @@ async function startBot() {
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
-            if (type !== "notify") return;
-            const msg = messages[0];
-            if (!msg.message) return;
+            for (const msg of messages) {
+                if (!msg.message) continue;
 
-            // Unwrap nested messages (viewOnce, ephemeral, etc.)
-            let messageContent = msg.message;
-            while (
-                messageContent?.ephemeralMessage?.message ||
-                messageContent?.viewOnceMessage?.message ||
-                messageContent?.viewOnceMessageV2?.message ||
-                messageContent?.documentWithCaptionMessage?.message
-            ) {
-                messageContent = 
-                    messageContent.ephemeralMessage?.message ||
-                    messageContent.viewOnceMessage?.message ||
-                    messageContent.viewOnceMessageV2?.message ||
-                    messageContent.documentWithCaptionMessage?.message;
-            }
+                // Unwrap nested messages (viewOnce, ephemeral, etc.)
+                let messageContent = msg.message;
+                while (
+                    messageContent?.ephemeralMessage?.message ||
+                    messageContent?.viewOnceMessage?.message ||
+                    messageContent?.viewOnceMessageV2?.message ||
+                    messageContent?.documentWithCaptionMessage?.message
+                ) {
+                    messageContent = 
+                        messageContent.ephemeralMessage?.message ||
+                        messageContent.viewOnceMessage?.message ||
+                        messageContent.viewOnceMessageV2?.message ||
+                        messageContent.documentWithCaptionMessage?.message;
+                }
 
-            const quotedMsg = messageContent?.extendedTextMessage?.contextInfo?.quotedMessage;
-            const isQuotedImage = !!quotedMsg?.imageMessage;
-            const isDirectImage = !!messageContent?.imageMessage;
+                const quotedMsg = messageContent?.extendedTextMessage?.contextInfo?.quotedMessage;
+                const isQuotedImage = !!quotedMsg?.imageMessage;
+                const isDirectImage = !!messageContent?.imageMessage;
 
-            const rawCaption = 
-                messageContent?.imageMessage?.caption ||
-                messageContent?.conversation ||
-                messageContent?.extendedTextMessage?.text ||
-                "";
+                const rawCaption = 
+                    messageContent?.imageMessage?.caption ||
+                    messageContent?.conversation ||
+                    messageContent?.extendedTextMessage?.text ||
+                    "";
 
-            const captionText = rawCaption.trim().toLowerCase();
-            const senderJid = msg.key.remoteJid;
-            const senderMobile = senderJid ? senderJid.split('@')[0].replace(/[^0-9]/g, "") : "Unknown";
+                const captionText = rawCaption.trim().toLowerCase();
+                const senderJid = msg.key.remoteJid;
+                
+                // Ignore status broadcasts
+                if (!senderJid || senderJid === 'status@broadcast') continue;
 
-            // Ignore status broadcasts
-            if (senderJid === 'status@broadcast') return;
+                const senderMobile = senderJid.split('@')[0].replace(/[^0-9]/g, "");
 
-            console.log(`📩 Incoming from ${senderMobile}: "${rawCaption}" | IsImage: ${isDirectImage || isQuotedImage}`);
+                console.log(`\n📩 [Message Received] From: ${senderMobile} | Type: ${type} | Text: "${rawCaption}" | Image: ${isDirectImage || isQuotedImage}`);
 
-            // 1. Menu / Greeting trigger
-            const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
-            if (isGreetingOrMenu && !isDirectImage && !isQuotedImage) {
-                await sendMenuResponse(sock, senderJid, msg);
-                return;
-            }
+                // 1. Menu / Greeting trigger
+                const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
+                if (isGreetingOrMenu && !isDirectImage && !isQuotedImage) {
+                    console.log(`💬 Replying with Menu to ${senderMobile}...`);
+                    await sendMenuResponse(sock, senderJid, msg);
+                    continue;
+                }
 
-            // 2. Document Tag Detection
-            const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
-            const isPanTag = captionText.includes("pan");
+                // 2. Document Tag Detection
+                const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
+                const isPanTag = captionText.includes("pan");
 
-            let targetMsgObj = msg;
-            let quotedRef = null;
+                let targetMsgObj = msg;
+                let quotedRef = null;
 
-            if (isQuotedImage) {
-                targetMsgObj = {
-                    message: quotedMsg,
-                    key: {
-                        remoteJid: senderJid,
-                        id: messageContent.extendedTextMessage.contextInfo.stanzaId,
-                        participant: messageContent.extendedTextMessage.contextInfo.participant
-                    }
-                };
-                quotedRef = msg;
-            }
+                if (isQuotedImage) {
+                    targetMsgObj = {
+                        message: quotedMsg,
+                        key: {
+                            remoteJid: senderJid,
+                            id: messageContent.extendedTextMessage.contextInfo.stanzaId,
+                            participant: messageContent.extendedTextMessage.contextInfo.participant
+                        }
+                    };
+                    quotedRef = msg;
+                }
 
-            if ((isDirectImage || isQuotedImage) && isAadhaarTag) {
-                await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
-            } else if ((isDirectImage || isQuotedImage) && isPanTag) {
-                await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
-            } else if (isDirectImage && !isAadhaarTag && !isPanTag) {
-                // Sent image without caption
-                await sock.sendMessage(senderJid, {
-                    text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
-                }, { quoted: msg });
-            } else if (!isDirectImage && !isQuotedImage && captionText.length > 0) {
-                // Any other text
-                await sendMenuResponse(sock, senderJid, msg);
+                if ((isDirectImage || isQuotedImage) && isAadhaarTag) {
+                    await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
+                } else if ((isDirectImage || isQuotedImage) && isPanTag) {
+                    await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
+                } else if (isDirectImage && !isAadhaarTag && !isPanTag) {
+                    // Sent image without caption
+                    await sock.sendMessage(senderJid, {
+                        text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
+                    }, { quoted: msg });
+                } else if (!isDirectImage && !isQuotedImage && captionText.length > 0) {
+                    // Any unhandled text
+                    await sendMenuResponse(sock, senderJid, msg);
+                }
             }
         } catch (err) {
             console.error("❌ Message Upsert Error:", err.message);
@@ -214,7 +217,7 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
         `🌐 *Uploads & Storage:*\n` +
         `• All images are automatically stored at: \`fabkraft.in/WhatsAppFolder/uploads/\`\n` +
         `• All data records are saved in MySQL database with \`wh_\` tables.\n\n` +
-        `_Send your image now to get started!_`;
+        `_Send your image or type *hi* anytime!_`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
