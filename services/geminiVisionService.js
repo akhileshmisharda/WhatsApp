@@ -94,10 +94,8 @@ function buildGeminiHeaders(apiKey) {
     return headers;
 }
 
-// Working official Gemini vision models on Google AI API (prioritizing 3.1 & 2.0 Flash)
+// Working official Gemini vision models on Google AI API
 const MODELS = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.1-flash',
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
     'gemini-1.5-flash',
@@ -631,8 +629,19 @@ Output ONLY raw valid JSON without markdown formatting.`;
             const totalTokens = Number(rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? (promptTokens + candidatesTokens));
 
             const tokens = { promptTokens, candidatesTokens, totalTokens };
-            const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
-            const parsed = JSON.parse(cleaned);
+            
+            let parsed = null;
+            try {
+                const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+                parsed = JSON.parse(cleaned);
+            } catch (jsonErr) {
+                const match = textResponse.match(/\{[\s\S]*\}/);
+                if (match) {
+                    parsed = JSON.parse(match[0]);
+                } else {
+                    throw new Error(`Failed to parse JSON response: ${jsonErr.message}`);
+                }
+            }
 
             let jData = null;
             let overallAcc = parsed.accuracy_overall || 100;
