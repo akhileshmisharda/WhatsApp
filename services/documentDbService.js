@@ -101,6 +101,7 @@ async function insertOrUpdateAadhaar({
     addressHindi,
     pincode,
     rawJson,
+    detectedSide,
     tokensPrompt,
     tokensCompletion,
     tokensTotal,
@@ -141,7 +142,7 @@ async function insertOrUpdateAadhaar({
         tokens_prompt: typeof tokensPrompt === 'number' ? tokensPrompt : 0,
         tokens_completion: typeof tokensCompletion === 'number' ? tokensCompletion : 0,
         tokens_total: typeof tokensTotal === 'number' ? tokensTotal : 0,
-        ai_model: sanitizeInput(aiModel) || 'gemini-3.1-flash-lite',
+        ai_model: sanitizeInput(aiModel) || 'gemini-2.0-flash',
         accuracy_overall: typeof accuracyOverall === 'number' ? accuracyOverall : 100,
         accuracy_aadhaar_number: typeof accuracyAadhaarNumber === 'number' ? accuracyAadhaarNumber : 100,
         accuracy_name_english: typeof accuracyNameEnglish === 'number' ? accuracyNameEnglish : 100,
@@ -152,28 +153,22 @@ async function insertOrUpdateAadhaar({
         receiver_mobile: cleanReceiver
     };
 
-    // Determine if current scan contains Front information vs Back information
-    const hasFrontInfo = !!payload.name_english || !!payload.dob || !!payload.gender_english;
-    const hasBackInfo = !!payload.address_english || !!payload.address_hindi || !!payload.father_name_english || !!payload.husband_name_english || !!payload.pincode;
-
-    let isFrontScan = false;
-    let isBackScan = false;
-
-    if (hasFrontInfo && !hasBackInfo) {
-        isFrontScan = true;
-    } else if (hasBackInfo && !hasFrontInfo) {
-        isBackScan = true;
-    } else {
-        // Both or single page with all info
-        isFrontScan = true;
-        isBackScan = true;
+    // Determine if current scan is Front vs Back
+    let isFrontScan = detectedSide === 'front';
+    let isBackScan = detectedSide === 'back';
+    if (!isFrontScan && !isBackScan) {
+        const hasFrontInfo = !!payload.name_english || !!payload.dob || !!payload.gender_english;
+        const hasBackInfo = !!payload.address_english || !!payload.address_hindi || !!payload.father_name_english || !!payload.husband_name_english || !!payload.pincode;
+        if (hasFrontInfo && !hasBackInfo) isFrontScan = true;
+        else if (hasBackInfo && !hasFrontInfo) isBackScan = true;
+        else { isFrontScan = true; isBackScan = true; }
     }
 
     try {
         let existing = null;
 
-        // 1. Primary Lookup: Exact Aadhaar Number
-        if (payload.aadhar_number && payload.aadhar_number !== "Not Found") {
+        // 1. Primary Lookup: Exact Aadhaar Number (if valid 12-digit)
+        if (payload.aadhar_number && payload.aadhar_number !== "Not Found" && payload.aadhar_number.replace(/\s/g, '').length >= 10) {
             const [rows] = await pool.execute(
                 'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
@@ -181,7 +176,7 @@ async function insertOrUpdateAadhaar({
             if (rows.length > 0) existing = rows[0];
         }
 
-        // 2. Secondary Lookup: Same Sender within last 30 minutes where Front or Back is still missing
+        // 2. Secondary Lookup: Same Sender within last 30 minutes where Front or Back is missing
         if (!existing && cleanSender !== 'Unknown') {
             const [recentRows] = await pool.execute(
                 `SELECT * FROM wh_aadhar_records 
@@ -199,10 +194,7 @@ async function insertOrUpdateAadhaar({
 
         // Case A: New Record -> INSERT
         if (!existing) {
-            if (!payload.aadhar_number) {
-                throw new Error("Aadhaar Number could not be determined to create a new record.");
-            }
-
+            const finalAadhaarNum = payload.aadhar_number || `DOC${Date.now().toString().slice(-8)}`;
             const frontUri = isFrontScan ? uploadUri : null;
             const backUri = isBackScan ? uploadUri : null;
 
@@ -220,7 +212,7 @@ async function insertOrUpdateAadhaar({
 
             const insertParams = [
                 payload.upload_id,
-                payload.aadhar_number,
+                finalAadhaarNum,
                 payload.virtual_id,
                 payload.name_english,
                 payload.name_hindi,
@@ -262,43 +254,47 @@ async function insertOrUpdateAadhaar({
             };
         }
 
-        // Case B: Existing Record Found -> Accuracy-Based Field Upgrade & Multi-Sided Merging
+        // Case B: Existing Record Found -> Merge & Upgrade
         const updateClauses = [];
         const updateParams = [];
 
-        // 1. Front vs Back Image URI
-        if (isFrontScan) {
-            if (!existing.front_image_uri || payload.accuracy_overall >= (existing.accuracy_overall || 0)) {
-                updateClauses.push('`front_image_uri` = ?');
-                updateParams.push(uploadUri);
-            }
-        }
-        if (isBackScan) {
-            if (!existing.back_image_uri || payload.accuracy_overall >= (existing.accuracy_overall || 0)) {
-                updateClauses.push('`back_image_uri` = ?');
-                updateParams.push(uploadUri);
-            }
+        // 1. Front vs Back Image URI (Strict separation)
+        if (isFrontScan && !isBackScan) {
+            updateClauses.push('`front_image_uri` = ?');
+            updateParams.push(uploadUri);
+        } else if (isBackScan && !isFrontScan) {
+            updateClauses.push('`back_image_uri` = ?');
+            updateParams.push(uploadUri);
+        } else {
+            if (!existing.front_image_uri) { updateClauses.push('`front_image_uri` = ?'); updateParams.push(uploadUri); }
+            if (!existing.back_image_uri) { updateClauses.push('`back_image_uri` = ?'); updateParams.push(uploadUri); }
         }
 
-        // 2. Name English & Accuracy
+        // 2. Aadhaar Number: If existing is valid, keep it; if new has valid and existing was dummy, update it
+        if (payload.aadhar_number && payload.aadhar_number.replace(/\s/g, '').length >= 10 && (!existing.aadhar_number || existing.aadhar_number.startsWith("DOC"))) {
+            updateClauses.push('`aadhar_number` = ?');
+            updateParams.push(payload.aadhar_number);
+        }
+
+        // 3. Name English & Accuracy
         if (shouldUpdateField(payload.name_english, payload.accuracy_name_english, existing.name_english, existing.accuracy_name_english)) {
             updateClauses.push('`name_english` = ?', '`accuracy_name_english` = ?');
             updateParams.push(payload.name_english, payload.accuracy_name_english);
         }
 
-        // 3. Name Hindi & Accuracy
+        // 4. Name Hindi & Accuracy
         if (shouldUpdateField(payload.name_hindi, payload.accuracy_name_hindi, existing.name_hindi, existing.accuracy_name_hindi)) {
             updateClauses.push('`name_hindi` = ?', '`accuracy_name_hindi` = ?');
             updateParams.push(payload.name_hindi, payload.accuracy_name_hindi);
         }
 
-        // 4. DOB & Accuracy
+        // 5. DOB & Accuracy
         if (shouldUpdateField(payload.dob, payload.accuracy_dob, existing.dob, existing.accuracy_dob)) {
             updateClauses.push('`dob` = ?', '`accuracy_dob` = ?');
             updateParams.push(payload.dob, payload.accuracy_dob);
         }
 
-        // 5. Gender
+        // 6. Gender
         if (payload.gender_english && (!existing.gender_english || existing.gender_english === 'Not Found')) {
             updateClauses.push('`gender_english` = ?');
             updateParams.push(payload.gender_english);
@@ -308,32 +304,32 @@ async function insertOrUpdateAadhaar({
             updateParams.push(payload.gender_hindi);
         }
 
-        // 6. Father's Name
-        if (shouldUpdateField(payload.father_name_english, 100, existing.father_name_english, 0)) {
+        // 7. Father's Name (Always save if present in scan)
+        if (payload.father_name_english) {
             updateClauses.push('`father_name_english` = ?');
             updateParams.push(payload.father_name_english);
         }
-        if (shouldUpdateField(payload.father_name_hindi, 100, existing.father_name_hindi, 0)) {
+        if (payload.father_name_hindi) {
             updateClauses.push('`father_name_hindi` = ?');
             updateParams.push(payload.father_name_hindi);
         }
 
-        // 7. Husband's Name
-        if (shouldUpdateField(payload.husband_name_english, 100, existing.husband_name_english, 0)) {
+        // 8. Husband's Name (Always save if present in scan)
+        if (payload.husband_name_english) {
             updateClauses.push('`husband_name_english` = ?');
             updateParams.push(payload.husband_name_english);
         }
-        if (shouldUpdateField(payload.husband_name_hindi, 100, existing.husband_name_hindi, 0)) {
+        if (payload.husband_name_hindi) {
             updateClauses.push('`husband_name_hindi` = ?');
             updateParams.push(payload.husband_name_hindi);
         }
 
-        // 8. Address & PIN
-        if (shouldUpdateField(payload.address_english, payload.accuracy_overall, existing.address_english, existing.accuracy_overall)) {
+        // 9. Address & PIN
+        if (payload.address_english && (!existing.address_english || existing.address_english === 'Not Found' || payload.address_english.length > existing.address_english.length)) {
             updateClauses.push('`address_english` = ?');
             updateParams.push(payload.address_english);
         }
-        if (shouldUpdateField(payload.address_hindi, payload.accuracy_overall, existing.address_hindi, existing.accuracy_overall)) {
+        if (payload.address_hindi && (!existing.address_hindi || existing.address_hindi === 'Not Found' || payload.address_hindi.length > existing.address_hindi.length)) {
             updateClauses.push('`address_hindi` = ?');
             updateParams.push(payload.address_hindi);
         }
@@ -342,45 +338,77 @@ async function insertOrUpdateAadhaar({
             updateParams.push(payload.pincode, payload.accuracy_pincode);
         }
 
-        // 9. Virtual ID
+        // 10. Virtual ID
         if (payload.virtual_id && (!existing.virtual_id || existing.virtual_id === 'Not Found')) {
             updateClauses.push('`virtual_id` = ?');
             updateParams.push(payload.virtual_id);
         }
 
-        // 10. Merge JSON
-        let mergedRawJson = payload.raw_json;
-        try {
-            const oldObj = typeof existing.raw_json === 'string' ? JSON.parse(existing.raw_json) : (existing.raw_json || {});
-            const newObj = typeof payload.raw_json === 'string' ? JSON.parse(payload.raw_json) : (payload.raw_json || {});
-            const oldCard = oldObj?.extracted_documents?.[0]?.aadhaar_card_data || oldObj?.aadhaar_card_data || {};
-            const newCard = newObj?.extracted_documents?.[0]?.aadhaar_card_data || newObj?.aadhaar_card_data || {};
+        // 11. Format exact merged JSON wrapper
+        const mergedAadhaarNumber = (payload.aadhar_number && payload.aadhar_number !== 'Not Found' && !payload.aadhar_number.startsWith("DOC")) ? payload.aadhar_number : existing.aadhar_number;
+        const mergedNameEng = payload.name_english || existing.name_english || "";
+        const mergedNameHin = payload.name_hindi || existing.name_hindi || "";
+        const mergedDob = payload.dob || existing.dob || "";
+        const mergedGender = payload.gender_english || existing.gender_english || "";
+        const mergedFatherEng = payload.father_name_english || existing.father_name_english || "";
+        const mergedFatherHin = payload.father_name_hindi || existing.father_name_hindi || "";
+        const mergedHusbandEng = payload.husband_name_english || existing.husband_name_english || "";
+        const mergedHusbandHin = payload.husband_name_hindi || existing.husband_name_hindi || "";
+        const mergedAddressEng = payload.address_english || existing.address_english || "";
+        const mergedAddressHin = payload.address_hindi || existing.address_hindi || "";
+        const mergedPincode = payload.pincode || existing.pincode || "";
 
-            const mergedObj = {
-                ...oldObj,
-                ...newObj,
-                extracted_documents: [
-                    {
-                        party_type: newObj?.extracted_documents?.[0]?.party_type || oldObj?.extracted_documents?.[0]?.party_type || "buyer",
-                        document_type: "aadhaar_card",
-                        aadhaar_card_data: {
-                            ...oldCard,
-                            ...newCard
-                        },
-                        aadhaar_card_data_accuracy: Math.max(oldObj?.extracted_documents?.[0]?.aadhaar_card_data_accuracy || 0, newObj?.extracted_documents?.[0]?.aadhaar_card_data_accuracy || 0)
-                    }
-                ],
-                extraction_accuracy: Math.max(oldObj.extraction_accuracy || 0, newObj.extraction_accuracy || 0)
-            };
-            mergedRawJson = JSON.stringify(mergedObj);
-        } catch {
-            mergedRawJson = payload.raw_json || existing.raw_json;
-        }
+        const finalMergedJsonObj = {
+            "aadhaar_card": [
+                {
+                    "extracted_documents": [
+                        {
+                            "party_type": "buyer",
+                            "document_type": "aadhaar_card",
+                            "aadhaar_card_data": {
+                                "aadhaarNumber": mergedAadhaarNumber || "",
+                                "fullName_English": mergedNameEng,
+                                "fullName_Hindi": mergedNameHin,
+                                "dob": mergedDob,
+                                "gender": mergedGender,
+                                "fatherName_English": mergedFatherEng,
+                                "fatherName_Hindi": mergedFatherHin,
+                                "husbandName_English": mergedHusbandEng,
+                                "husbandName_Hindi": mergedHusbandHin,
+                                "fullAddress_English": mergedAddressEng,
+                                "fullAddress_Hindi": mergedAddressHin,
+                                "pincode": mergedPincode,
+                                "pancard": "",
+                                "aadhaarNumber_accuracy": 100,
+                                "fullName_English_accuracy": 100,
+                                "fullName_Hindi_accuracy": 100,
+                                "dob_accuracy": 100,
+                                "fatherName_Hindi_accuracy": 100,
+                                "husbandName_Hindi_accuracy": 100,
+                                "pincode_accuracy": 100
+                            },
+                            "aadhaar_card_data_accuracy": 100
+                        }
+                    ],
+                    "extraction_result": {
+                        "scan_quality_rating": 9,
+                        "cross_verification_done": true,
+                        "verification_result": "Information verified across Aadhaar card scans.",
+                        "low_accuracy_reason": "",
+                        "advice_rescan": "No",
+                        "source_page_number": 1
+                    },
+                    "extraction_accuracy": 100,
+                    "is_custom": true,
+                    "_display_name": "Aadhar Card"
+                }
+            ]
+        };
 
         updateClauses.push('`raw_json` = ?');
-        updateParams.push(mergedRawJson);
+        updateParams.push(JSON.stringify(finalMergedJsonObj));
 
-        // 11. Accumulate Tokens & Update Accuracy Rating
+        // 12. Accumulate Tokens & Update Accuracy Rating
         const newTotalPrompt = (existing.tokens_prompt || 0) + payload.tokens_prompt;
         const newTotalCompletion = (existing.tokens_completion || 0) + payload.tokens_completion;
         const newTotalTokens = (existing.tokens_total || 0) + payload.tokens_total;

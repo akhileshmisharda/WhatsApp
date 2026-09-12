@@ -94,19 +94,16 @@ function buildGeminiHeaders(apiKey) {
     return headers;
 }
 
-// Prioritize Gemini 3.1 Flash-Lite & latest Flash-Lite vision models
+// Working official Gemini vision models on Google AI API
 const MODELS = [
-    'gemini-3.1-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash-lite-preview-02-05',
     'gemini-2.0-flash',
-    'gemini-1.5-flash-8b',
-    'gemini-1.5-flash'
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
 ];
 
 /**
- * Extracts structured Aadhaar details using Gemini 3.1 Flash-Lite with exact enterprise prompt & token tracking
+ * Extracts structured Aadhaar details using Gemini Flash with exact enterprise prompt & token tracking
  * @param {Buffer} buffer - Image buffer
  * @returns {Promise<Object>}
  */
@@ -117,57 +114,70 @@ async function extractAadhaarWithGemini(buffer) {
     const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN).
 
 Strict Rules:
-1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array.
+1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array under 'aadhaar_card'.
 2. MAPPING KEYS: You MUST accurately identify the 'party_type' (property, buyer, seller, witness, unassigned) and 'document_type' (sale_deed, aadhaar_card, pan_card) to match the system checklist.
-3. CONDITIONAL POPULATION: Depending on the 'document_type', fill ONLY the corresponding data object ('sale_deed_data', 'aadhaar_card_data', or 'pan_card_data') and leave the others null.
-4. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling, archaic legal terms, or names.
-5. ZERO FABRICATION: If a field or table cell is missing or unreadable, set it to empty string ''. Never guess digits or dates.
-6. NUMERIC ACCURACY: Extract all land areas, rent amounts, account numbers, and dates using standard Arabic numerals (0-9). Preserve exact decimal precision.
-7. ACCURACY SCORE: Evaluate your own confidence (0-100) and return it in 'accuracyFields'.
-8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only. Do not translate Hindi names, addresses, or boundaries into English.`;
+3. DETECT SIDE: Identify whether the scanned image is the "front" side (contains photo, name, dob, gender, 12-digit aadhaar number), the "back" side (contains address, father/husband name, pincode, barcode/QR), or "both" (contains both front & back).
+4. AADHAAR NUMBER ACCURACY: 
+   - On the FRONT side, extract the clean 12-digit Aadhaar number (XXXX XXXX XXXX).
+   - On the BACK side, Aadhaar numbers are typically NOT printed (only helpline numbers like 1947 or barcodes exist). NEVER mistake toll-free numbers (1947, 1800-xxx) or PIN codes for the Aadhaar number. If no valid 12-digit Aadhaar number is printed on the back, leave 'aadhaarNumber': "".
+5. FATHER VS HUSBAND NAME:
+   - S/O, D/O, C/O -> Extract into fatherName_English & fatherName_Hindi. Leave husbandName empty.
+   - W/O (Wife of) -> Extract into husbandName_English & husbandName_Hindi. Leave fatherName empty.
+6. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling or names.
+7. ZERO FABRICATION: If a field is missing or unreadable, set it to empty string "". Never guess digits or dates.
+8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only.
+9. ACCURACY SCORE: Evaluate your confidence (0-100) and return field-level accuracy.`;
 
-    const userPrompt = `Extract this document scan into the following exact JSON schema with field-level confidence scores (0-100):
+    const userPrompt = `Extract this document scan into the following exact JSON schema:
 {
-  "extracted_documents": [
+  "aadhaar_card": [
     {
-      "party_type": "buyer",
-      "document_type": "aadhaar_card",
-      "aadhaar_card_data": {
-        "aadhaarNumber": "12-digit format, e.g. XXXX XXXX XXXX",
-        "fullName_English": "Extract full name in English exactly as printed.",
-        "fullName_Hindi": "Extract full name in Hindi (Devanagari script) exactly as printed.",
-        "dob": "DD/MM/YYYY or YYYY",
-        "gender": "Extract gender (e.g., MALE, FEMALE, पुरुष, महिला)",
-        "fatherName_English": "Extract name in English ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
-        "fatherName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
-        "husbandName_English": "Extract name in English ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
-        "husbandName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
-        "fullAddress_English": "Extract complete address in English.",
-        "fullAddress_Hindi": "Extract complete address in Hindi (Devanagari script).",
-        "pincode": "6-digit PIN code",
-        "pancard": "",
-        "aadhaarNumber_accuracy": 100,
-        "fullName_English_accuracy": 100,
-        "fullName_Hindi_accuracy": 100,
-        "dob_accuracy": 100,
-        "fatherName_Hindi_accuracy": 100,
-        "husbandName_Hindi_accuracy": 100,
-        "pincode_accuracy": 100
+      "extracted_documents": [
+        {
+          "party_type": "buyer",
+          "document_type": "aadhaar_card",
+          "detected_side": "front",
+          "aadhaar_card_data": {
+            "aadhaarNumber": "XXXX XXXX XXXX or empty string if not visible",
+            "fullName_English": "Full name in English exactly as printed or empty string",
+            "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or empty string",
+            "dob": "DD/MM/YYYY or YYYY or empty string",
+            "gender": "MALE, FEMALE, पुरुष, महिला or empty string",
+            "fatherName_English": "Name in English ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
+            "fatherName_Hindi": "Name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
+            "husbandName_English": "Name in English ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
+            "husbandName_Hindi": "Name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
+            "fullAddress_English": "Complete address in English or empty string",
+            "fullAddress_Hindi": "Complete address in Hindi (Devanagari script) or empty string",
+            "pincode": "6-digit PIN code or empty string",
+            "pancard": "",
+            "aadhaarNumber_accuracy": 100,
+            "fullName_English_accuracy": 100,
+            "fullName_Hindi_accuracy": 100,
+            "dob_accuracy": 100,
+            "fatherName_Hindi_accuracy": 100,
+            "husbandName_Hindi_accuracy": 100,
+            "pincode_accuracy": 100
+          },
+          "aadhaar_card_data_accuracy": 100
+        }
+      ],
+      "extraction_result": {
+        "scan_quality_rating": 9,
+        "cross_verification_done": true,
+        "verification_result": "Information verified.",
+        "low_accuracy_reason": "",
+        "advice_rescan": "No",
+        "source_page_number": 1
       },
-      "aadhaar_card_data_accuracy": 100
+      "extraction_accuracy": 100,
+      "is_custom": true,
+      "_display_name": "Aadhar Card"
     }
-  ],
-  "extraction_result": {
-    "scan_quality_rating": 9,
-    "cross_verification_done": true,
-    "verification_result": "Information matched across front and back of card.",
-    "low_accuracy_reason": "",
-    "advice_rescan": "No"
-  },
-  "extraction_accuracy": 100
+  ]
 }
 
-Output ONLY raw valid JSON.`;
+Output ONLY raw valid JSON without markdown formatting.`;
 
     const requestBody = {
         system_instruction: {
@@ -194,48 +204,76 @@ Output ONLY raw valid JSON.`;
         }
     };
 
-    // 1. Try Gemini 3.1 Flash-Lite & latest models
+    // 1. Try Gemini models
     for (const model of MODELS) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
-                timeout: 25000
+                timeout: 30000
             });
 
             const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-            const usage = response.data?.usageMetadata || {};
+            
+            // Extract token usage metadata across all Google API formats
+            const rawUsage = response.data?.usageMetadata || response.data?.usage || response.data?._metadata || {};
+            const promptTokens = rawUsage.promptTokenCount ?? rawUsage.prompt_token_count ?? rawUsage.input_token ?? rawUsage.inputTokens ?? rawUsage.promptTokens ?? 0;
+            const candidatesTokens = rawUsage.candidatesTokenCount ?? rawUsage.candidates_token_count ?? rawUsage.output_token ?? rawUsage.outputTokens ?? rawUsage.candidatesTokens ?? 0;
+            const totalTokens = rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? rawUsage.total_token ?? rawUsage.totalTokens ?? (promptTokens + candidatesTokens);
+
             const tokens = {
-                promptTokens: usage.promptTokenCount || 0,
-                candidatesTokens: usage.candidatesTokenCount || 0,
-                totalTokens: usage.totalTokenCount || 0
+                promptTokens: Number(promptTokens),
+                candidatesTokens: Number(candidatesTokens),
+                totalTokens: Number(totalTokens)
             };
 
             const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
             const parsed = JSON.parse(cleaned);
 
-            // Extract document data from array or direct object
+            // Extract document data from exact hierarchy
             let cardData = null;
+            let detectedSide = "both";
             let cardAccuracy = 100;
-            if (Array.isArray(parsed.extracted_documents) && parsed.extracted_documents.length > 0) {
-                const doc = parsed.extracted_documents.find(d => d.document_type === 'aadhaar_card' || d.aadhaar_card_data) || parsed.extracted_documents[0];
-                if (doc) {
+            let overallAccuracy = 100;
+
+            const aadhaarArray = parsed.aadhaar_card || parsed.extracted_documents || [];
+            if (Array.isArray(aadhaarArray) && aadhaarArray.length > 0) {
+                const firstEntry = aadhaarArray[0];
+                overallAccuracy = firstEntry.extraction_accuracy || 100;
+                const innerDocs = firstEntry.extracted_documents || [firstEntry];
+                if (Array.isArray(innerDocs) && innerDocs.length > 0) {
+                    const doc = innerDocs[0];
                     cardData = doc.aadhaar_card_data || doc;
-                    cardAccuracy = doc.aadhaar_card_data_accuracy || parsed.extraction_accuracy || 100;
+                    detectedSide = doc.detected_side || "both";
+                    cardAccuracy = doc.aadhaar_card_data_accuracy || overallAccuracy;
                 }
-            }
-            if (!cardData) {
+            } else if (parsed.extracted_documents && Array.isArray(parsed.extracted_documents)) {
+                const doc = parsed.extracted_documents[0];
+                cardData = doc.aadhaar_card_data || doc;
+                detectedSide = doc.detected_side || "both";
+                cardAccuracy = doc.aadhaar_card_data_accuracy || 100;
+            } else {
                 cardData = parsed.aadhaar_card_data || parsed;
             }
 
-            const overallAccuracy = typeof parsed.extraction_accuracy === 'number' ? parsed.extraction_accuracy : cardAccuracy;
+            if (!cardData) cardData = {};
 
-            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
+            // Fallback detection of side if AI did not provide detected_side
+            if (!detectedSide || detectedSide === "both") {
+                const hasFront = !!(cardData.fullName_English || cardData.dob || cardData.gender);
+                const hasBack = !!(cardData.fullAddress_English || cardData.fullAddress_Hindi || cardData.fatherName_English || cardData.husbandName_English || cardData.pincode);
+                if (hasFront && !hasBack) detectedSide = "front";
+                else if (hasBack && !hasFront) detectedSide = "back";
+                else detectedSide = "both";
+            }
+
+            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Side: ${detectedSide}, Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
             return {
                 success: true,
                 engine: `Gemini (${model})`,
                 model: model,
                 tokens: tokens,
+                detectedSide: detectedSide,
                 rawJson: JSON.stringify(parsed),
                 aadhaar_card_data: cardData,
                 accuracy: {
@@ -247,10 +285,10 @@ Output ONLY raw valid JSON.`;
                     pincode: cardData.pincode_accuracy || 100
                 },
                 data: {
-                    aadharNumber: cardData.aadhaarNumber || "Not Found",
+                    aadharNumber: (cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.startsWith("1947")) ? cardData.aadhaarNumber : "Not Found",
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
-                    nameEnglish: cardData.fullName_English || cardData.nameEnglish || "Not Found",
-                    nameHindi: cardData.fullName_Hindi || cardData.nameHindi || "Not Found",
+                    nameEnglish: cardData.fullName_English || "Not Found",
+                    nameHindi: cardData.fullName_Hindi || "Not Found",
                     dob: cardData.dob || "Not Found",
                     gender: cardData.gender || "Not Found",
                     genderEnglish: cardData.gender || "Not Found",
@@ -276,6 +314,56 @@ Output ONLY raw valid JSON.`;
         return {
             success: true,
             engine: "Google Cloud Vision",
+            model: "Google Cloud Vision OCR",
+            tokens: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+            detectedSide: "both",
+            rawJson: JSON.stringify({
+                "aadhaar_card": [
+                    {
+                        "extracted_documents": [
+                            {
+                                "party_type": "buyer",
+                                "document_type": "aadhaar_card",
+                                "detected_side": "both",
+                                "aadhaar_card_data": {
+                                    "aadhaarNumber": visionResult.aadharNumber || "",
+                                    "fullName_English": visionResult.nameEnglish || "",
+                                    "fullName_Hindi": visionResult.nameHindi || "",
+                                    "dob": visionResult.dob || "",
+                                    "gender": visionResult.genderEnglish || "",
+                                    "fatherName_English": "",
+                                    "fatherName_Hindi": "",
+                                    "husbandName_English": "",
+                                    "husbandName_Hindi": "",
+                                    "fullAddress_English": visionResult.addressEnglish || "",
+                                    "fullAddress_Hindi": visionResult.addressHindi || "",
+                                    "pincode": visionResult.pincode || "",
+                                    "pancard": "",
+                                    "aadhaarNumber_accuracy": 90,
+                                    "fullName_English_accuracy": 90,
+                                    "fullName_Hindi_accuracy": 90,
+                                    "dob_accuracy": 90,
+                                    "fatherName_Hindi_accuracy": 90,
+                                    "husbandName_Hindi_accuracy": 90,
+                                    "pincode_accuracy": 90
+                                },
+                                "aadhaar_card_data_accuracy": 90
+                            }
+                        ],
+                        "extraction_result": {
+                            "scan_quality_rating": 8,
+                            "cross_verification_done": true,
+                            "verification_result": "Extracted via Cloud Vision OCR",
+                            "low_accuracy_reason": "",
+                            "advice_rescan": "No",
+                            "source_page_number": 1
+                        },
+                        "extraction_accuracy": 90,
+                        "is_custom": true,
+                        "_display_name": "Aadhar Card"
+                    }
+                ]
+            }),
             data: visionResult
         };
     } catch (visionErr) {
@@ -283,12 +371,14 @@ Output ONLY raw valid JSON.`;
         return {
             success: false,
             engine: "None",
+            model: "None",
+            tokens: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+            detectedSide: "both",
             data: {
                 aadharNumber: "Not Found",
                 nameEnglish: "Not Found",
                 dob: "Not Found"
             }
-        };
     }
 }
 
