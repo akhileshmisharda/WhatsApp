@@ -23,7 +23,7 @@ const { logImageUpload } = require('./services/documentDbService');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v3.1.0-PROD";
+const APP_VERSION = "v3.2.0-PROD";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -122,6 +122,10 @@ app.listen(PORT, () => {
 // 3. SENDER PHONE NUMBER & MESSAGE EXTRACTOR
 // ---------------------------------------------------------
 async function getActualPhoneNumber(senderJid, msg) {
+    if (msg?.key?.fromMe) {
+        return currentBotNumber;
+    }
+
     if (!senderJid) return "Unknown";
 
     // Case 1: Standard phone number JID
@@ -289,9 +293,6 @@ async function startBot() {
             for (const msg of messages) {
                 if (!msg.message) continue;
 
-                // Never reply to self
-                if (msg.key.fromMe) continue;
-
                 const senderJid = msg.key.remoteJid;
                 if (!senderJid) continue;
 
@@ -316,21 +317,33 @@ async function startBot() {
 
                 const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
+
+                // 1. Prevent bot infinite reply loops
+                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *')) {
+                    continue;
+                }
+
+                // 2. Allow self-messages (from 9610238234) ONLY if sending Aadhaar/PAN image or "hi"
+                const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
+                const isPanTag = captionText.includes("pan");
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
+
+                if (msg.key.fromMe) {
+                    if (!((isImage && (isAadhaarTag || isPanTag)) || (isExactGreeting && !isImage))) {
+                        continue;
+                    }
+                }
+
                 const senderMobile = await getActualPhoneNumber(senderJid, msg);
 
-                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
+                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage} | FromMe: ${msg.key.fromMe}`);
 
-                // 1. Strict Explicit Greeting only (Must be exactly 'hi', 'hello', 'menu', 'help', 'start')
-                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
+                // 3. Strict Explicit Greeting only (Must be exactly 'hi', 'hello', 'menu', 'help', 'start')
                 if (isExactGreeting && !isImage) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg);
                     continue;
                 }
-
-                // 2. Document Tag Detection (ONLY process if caption has aadhar or pan)
-                const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
-                const isPanTag = captionText.includes("pan");
 
                 // If image has no aadhar/pan caption, DO NOTHING (silent)
                 if (!isAadhaarTag && !isPanTag) {
