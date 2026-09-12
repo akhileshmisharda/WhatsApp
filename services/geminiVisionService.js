@@ -379,6 +379,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 nameEnglish: "Not Found",
                 dob: "Not Found"
             }
+        };
     }
 }
 
