@@ -23,7 +23,7 @@ const { logImageUpload } = require('./services/documentDbService');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v3.0.0-PROD";
+const APP_VERSION = "v3.1.0-PROD";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -119,8 +119,47 @@ app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------
-// 3. EXTRACT TEXT & MEDIA HELPER
+// 3. SENDER PHONE NUMBER & MESSAGE EXTRACTOR
 // ---------------------------------------------------------
+async function getActualPhoneNumber(senderJid, msg) {
+    if (!senderJid) return "Unknown";
+
+    // Case 1: Standard phone number JID
+    if (senderJid.endsWith('@s.whatsapp.net')) {
+        return senderJid.split('@')[0].replace(/[^0-9]/g, "");
+    }
+
+    // Case 2: Check alternative participant fields provided by Baileys
+    if (msg.key?.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
+        return msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, "");
+    }
+    if (msg.key?.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
+        return msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
+    }
+
+    // Case 3: WhatsApp LID (Linked Identity Device ID) -> Look up mapped phone number in MySQL
+    if (senderJid.endsWith('@lid')) {
+        const lidId = senderJid.split('@')[0].replace(/[^0-9]/g, "");
+        try {
+            const [rows] = await pool.execute(
+                `SELECT value FROM wh_baileys_auth WHERE id IN (?, ?)`,
+                [`lid-mapping-${lidId}`, `lid-mapping-${lidId}_reverse`]
+            );
+            for (const r of rows) {
+                if (r.value) {
+                    const clean = String(r.value).replace(/[^0-9]/g, "");
+                    if (clean.length >= 10 && clean.length <= 13) return clean;
+                }
+            }
+        } catch (e) {
+            console.error("LID lookup error:", e.message);
+        }
+        return lidId;
+    }
+
+    return senderJid.split('@')[0].replace(/[^0-9]/g, "");
+}
+
 function getMessageDetails(msg) {
     if (!msg?.message) return { text: "", isImage: false, imageMessage: null };
 
@@ -277,7 +316,7 @@ async function startBot() {
 
                 const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
-                const senderMobile = senderJid.split('@')[0].replace(/[^0-9]/g, "");
+                const senderMobile = await getActualPhoneNumber(senderJid, msg);
 
                 logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
 
@@ -331,7 +370,7 @@ async function startBot() {
 async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
         `👋 *Welcome to Fabkraft Document Uploader!*\n` +
-        ` *Build Version:* \`${APP_VERSION}\`\n\n` +
+        `🔖 *Build Version:* \`${APP_VERSION}\`\n\n` +
         `Send your document images with the appropriate caption to upload directly to Fabkraft ERP:\n\n` +
         `🪪 *Aadhaar Card:*\n` +
         `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n\n` +
@@ -344,7 +383,7 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
 }
 
 /**
- * Handles Direct Image Upload (No OCR) & Database Logging in wh_uploads
+ * Handles Direct Image Upload & Database Logging in wh_uploads
  */
 async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, docTitle, category, quotedRef = null) {
     logEvent("UPLOAD_START", `Uploading ${docTitle} from ${senderMobile}...`);
@@ -366,7 +405,16 @@ async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, doc
 
         // 1. Upload file buffer to fabkraft.in/WhatsAppFolder/uploads/<category>/
         const uploadResult = await uploadToFabkraft(buffer, fileName, category);
-        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/${category}/${fileName}`;
+
+        if (!uploadResult.success) {
+            logEvent("UPLOAD_FAILED", `Upload failed for ${senderMobile}: ${uploadResult.error}`);
+            await sock.sendMessage(replyJid, {
+                text: `❌ *Upload Failed:* ${uploadResult.error || 'Server error'}. Please try again.`
+            }, { quoted: quotedRef || imageMsgObj });
+            return;
+        }
+
+        const uploadUri = uploadResult.uploadUri;
 
         // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
@@ -391,7 +439,7 @@ async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, doc
             `🌐 *Server Link:*\n${uploadUri}`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
-        logEvent("UPLOAD_SUCCESS", `${docTitle} uploaded with ID #${uploadId} for ${senderMobile}`);
+        logEvent("UPLOAD_SUCCESS", `${docTitle} uploaded with ID #${uploadId} for ${senderMobile}`, { uploadUri });
 
     } catch (err) {
         logEvent("UPLOAD_ERROR", `Failed to upload for ${senderMobile}: ${err.message}`);
