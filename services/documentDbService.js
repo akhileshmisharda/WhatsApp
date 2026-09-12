@@ -557,16 +557,154 @@ async function insertOrUpdatePan({
                 action: 'updated',
                 message: 'Existing PAN record updated.'
             };
-        }
+let jamabandiTableChecked = false;
+async function ensureJamabandiTableExists() {
+    if (jamabandiTableChecked) return;
+    try {
+        const createSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_jamabandi_records\` (
+                \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+                \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`form_name\` VARCHAR(255) DEFAULT NULL,
+                \`document_type\` VARCHAR(255) DEFAULT NULL,
+                \`village\` VARCHAR(255) DEFAULT NULL,
+                \`patwar_halka\` VARCHAR(255) DEFAULT NULL,
+                \`land_inspector_circle\` VARCHAR(255) DEFAULT NULL,
+                \`tehsil\` VARCHAR(255) DEFAULT NULL,
+                \`district\` VARCHAR(255) DEFAULT NULL,
+                \`land_holder\` VARCHAR(255) DEFAULT NULL,
+                \`samvat_period\` VARCHAR(255) DEFAULT NULL,
+                \`area_unit\` VARCHAR(50) DEFAULT NULL,
+                \`khata_no_new\` VARCHAR(50) DEFAULT NULL,
+                \`khata_no_old\` VARCHAR(50) DEFAULT NULL,
+                \`total_khasra_count\` INT DEFAULT 0,
+                \`total_area\` VARCHAR(50) DEFAULT NULL,
+                \`total_rent\` VARCHAR(50) DEFAULT NULL,
+                \`khatedar_count\` INT DEFAULT 0,
+                \`khatedar_details\` LONGTEXT DEFAULT NULL,
+                \`khasra_details\` LONGTEXT DEFAULT NULL,
+                \`raw_json\` LONGTEXT DEFAULT NULL,
+                \`tokens_prompt\` INT DEFAULT 0,
+                \`tokens_completion\` INT DEFAULT 0,
+                \`tokens_total\` INT DEFAULT 0,
+                \`ai_model\` VARCHAR(100) DEFAULT NULL,
+                \`accuracy_overall\` INT DEFAULT 100,
+                \`sender_mobile\` VARCHAR(25) NOT NULL,
+                \`receiver_mobile\` VARCHAR(25) NOT NULL,
+                \`document_uri\` VARCHAR(500) DEFAULT NULL,
+                \`mime_type\` VARCHAR(50) DEFAULT 'image/jpeg',
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_village\` (\`village\`),
+                INDEX \`idx_tehsil\` (\`tehsil\`),
+                INDEX \`idx_district\` (\`district\`),
+                INDEX \`idx_khata_new\` (\`khata_no_new\`),
+                INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createSql);
+        jamabandiTableChecked = true;
+        console.log("✅ [Database] Checked/Created 'wh_jamabandi_records' table");
     } catch (err) {
-        console.error('❌ [documentDbService] PAN DB Error:', err.message);
-        throw err;
+        console.warn("⚠️ [Database] Jamabandi table check warning:", err.message);
     }
+}
+
+/**
+ * Inserts structured Rajasthan Jamabandi records into wh_jamabandi_records
+ */
+async function insertJamabandiRecord({
+    uploadId,
+    formName,
+    documentType,
+    village,
+    patwarHalka,
+    landInspectorCircle,
+    tehsil,
+    district,
+    landHolder,
+    samvatPeriod,
+    areaUnit,
+    khataNoNew,
+    khataNoOld,
+    totalKhasraCount,
+    totalArea,
+    totalRent,
+    khatedarDetails,
+    khasraDetails,
+    rawJson,
+    tokensPrompt,
+    tokensCompletion,
+    tokensTotal,
+    aiModel,
+    accuracyOverall,
+    senderMobile,
+    receiverMobile,
+    documentUri,
+    mimeType
+}) {
+    await ensureJamabandiTableExists();
+
+    const khatedarArray = Array.isArray(khatedarDetails) ? khatedarDetails : [];
+    const khasraArray = Array.isArray(khasraDetails) ? khasraDetails : [];
+
+    const insertSql = `
+        INSERT INTO wh_jamabandi_records (
+            upload_id, form_name, document_type, village, patwar_halka,
+            land_inspector_circle, tehsil, district, land_holder, samvat_period,
+            area_unit, khata_no_new, khata_no_old, total_khasra_count, total_area,
+            total_rent, khatedar_count, khatedar_details, khasra_details, raw_json,
+            tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
+            sender_mobile, receiver_mobile, document_uri, mime_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const params = [
+        uploadId || null,
+        sanitizeInput(formName),
+        sanitizeInput(documentType),
+        sanitizeInput(village),
+        sanitizeInput(patwarHalka),
+        sanitizeInput(landInspectorCircle),
+        sanitizeInput(tehsil),
+        sanitizeInput(district),
+        sanitizeInput(landHolder),
+        sanitizeInput(samvatPeriod),
+        sanitizeInput(areaUnit),
+        sanitizeInput(khataNoNew),
+        sanitizeInput(khataNoOld),
+        typeof totalKhasraCount === 'number' ? totalKhasraCount : (khasraArray.length || 0),
+        sanitizeInput(totalArea),
+        sanitizeInput(totalRent),
+        khatedarArray.length,
+        JSON.stringify(khatedarArray),
+        JSON.stringify(khasraArray),
+        typeof rawJson === 'object' ? JSON.stringify(rawJson) : sanitizeInput(rawJson),
+        typeof tokensPrompt === 'number' ? tokensPrompt : 0,
+        typeof tokensCompletion === 'number' ? tokensCompletion : 0,
+        typeof tokensTotal === 'number' ? tokensTotal : 0,
+        sanitizeInput(aiModel) || 'gemini-2.0-flash',
+        typeof accuracyOverall === 'number' ? accuracyOverall : 100,
+        sanitizeInput(senderMobile) || 'Unknown',
+        sanitizeInput(receiverMobile) || 'Unknown',
+        sanitizeInput(documentUri),
+        sanitizeInput(mimeType) || 'image/jpeg'
+    ];
+
+    const [result] = await pool.execute(insertSql, params);
+
+    return {
+        status: 'success',
+        action: 'inserted',
+        recordId: result.insertId,
+        message: 'New Jamabandi record created.'
+    };
 }
 
 module.exports = {
     logImageUpload,
     insertOrUpdateAadhaar,
-    insertOrUpdatePan
+    insertOrUpdatePan,
+    insertJamabandiRecord
 };
 

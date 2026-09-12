@@ -22,6 +22,7 @@ async function initializeDatabase() {
         console.log("   - wh_uploads (Master Image Uploads & Metadata)");
         console.log("   - wh_aadhar_records (Aadhaar Card Detailed Fields)");
         console.log("   - wh_pan_records (PAN Card Detailed Fields)");
+        console.log("   - wh_jamabandi_records (Rajasthan Jamabandi P-26C Records)");
         console.log("   - wh_baileys_auth (WhatsApp Session Storage for Cloud Run)");
 
     } catch (err) {

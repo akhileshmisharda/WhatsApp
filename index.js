@@ -18,17 +18,18 @@ const {
 const pool = require('./services/db');
 const { useMySQLAuthState } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
-const { extractAadhaarWithGemini, extractPanWithGemini } = require('./services/geminiVisionService');
+const { extractAadhaarWithGemini, extractPanWithGemini, extractJamabandiWithGemini } = require('./services/geminiVisionService');
 const {
     logImageUpload,
     insertOrUpdateAadhaar,
-    insertOrUpdatePan
+    insertOrUpdatePan,
+    insertJamabandiRecord
 } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.7-STRICT-AADHAAR-MATCH";
+const APP_VERSION = "v5.0.0-JAMABANDI-PDF-SUPPORT";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -98,65 +99,41 @@ app.get('/send-test', async (req, res) => {
     try {
         const jid = `${targetMobile}@s.whatsapp.net`;
         logEvent("OUTGOING_TEST", `Sending test message to ${jid}`, { text });
-
-        const result = await sock.sendMessage(jid, { text: `🤖 *Test Message (${APP_VERSION}):*\n${text}` });
-        logEvent("OUTGOING_SUCCESS", `Test message delivered to ${jid}`);
-
-        res.json({
-            success: true,
-            version: APP_VERSION,
-            message: `Test message sent to ${targetMobile}`,
-            resultId: result?.key?.id,
-            status: connectionStatus
-        });
+        await sock.sendMessage(jid, { text });
+        res.json({ success: true, message: `Sent test message to ${jid}` });
     } catch (err) {
-        logEvent("OUTGOING_ERROR", `Failed to send to ${targetMobile}: ${err.message}`);
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
+        logEvent("OUTGOING_TEST_ERROR", err.message);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
 app.get('/health', (req, res) => res.send('OK'));
 
-app.listen(PORT, '0.0.0.0', () => {
-    logEvent("SERVER", `Express server listening on 0.0.0.0:${PORT} [Version: ${APP_VERSION}]`);
+app.listen(PORT, () => {
+    console.log(`🚀 [Server] Cloud Run HTTP Listener active on port ${PORT} (${APP_VERSION})`);
 });
 
 // ---------------------------------------------------------
-// 3. SENDER PHONE NUMBER & MESSAGE EXTRACTOR
+// 3. UTILITIES & MESSAGE PARSING
 // ---------------------------------------------------------
 async function getActualPhoneNumber(senderJid, msg) {
-    if (msg?.key?.fromMe) {
-        return currentBotNumber;
-    }
-
     if (!senderJid) return "Unknown";
-
-    // Case 1: Standard phone number JID
-    if (senderJid.endsWith('@s.whatsapp.net')) {
-        return senderJid.split('@')[0].replace(/[^0-9]/g, "");
-    }
-
-    // Case 2: Check alternative participant fields provided by Baileys
-    if (msg.key?.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
-        return msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, "");
-    }
-    if (msg.key?.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
-        return msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
-    }
-
-    // Case 3: WhatsApp LID -> Look up mapped phone number in MySQL
+    
     if (senderJid.endsWith('@lid')) {
-        const lidId = senderJid.split('@')[0].replace(/[^0-9]/g, "");
+        const lidId = senderJid.split('@')[0];
         try {
+            const contextInfo = msg?.message?.extendedTextMessage?.contextInfo || 
+                                msg?.message?.imageMessage?.contextInfo ||
+                                msg?.message?.documentMessage?.contextInfo;
+            if (contextInfo?.participant && contextInfo.participant.endsWith('@s.whatsapp.net')) {
+                return contextInfo.participant.split('@')[0].replace(/[^0-9]/g, "");
+            }
+
             const [rows] = await pool.execute(
-                `SELECT value FROM wh_baileys_auth WHERE id IN (?, ?)`,
-                [`lid-mapping-${lidId}`, `lid-mapping-${lidId}_reverse`]
+                `SELECT value FROM wh_baileys_auth WHERE id LIKE 'contacts-%' OR id LIKE 'app-state-sync-%'`
             );
             for (const r of rows) {
-                if (r.value) {
+                if (r.value && typeof r.value === 'string' && r.value.includes(lidId)) {
                     const clean = String(r.value).replace(/[^0-9]/g, "");
                     if (clean.length >= 10 && clean.length <= 13) return clean;
                 }
@@ -171,7 +148,7 @@ async function getActualPhoneNumber(senderJid, msg) {
 }
 
 function getMessageDetails(msg) {
-    if (!msg?.message) return { text: "", isImage: false, imageMessage: null };
+    if (!msg?.message) return { text: "", isMedia: false, isImage: false, isPdf: false, mimeType: 'image/jpeg' };
 
     let content = msg.message;
     while (
@@ -196,14 +173,33 @@ function getMessageDetails(msg) {
         "";
 
     const isImage = !!content?.imageMessage;
+    const docMsg = content?.documentMessage;
+    const isDoc = !!docMsg;
+    const isPdf = isDoc && (
+        docMsg.mimetype === 'application/pdf' || 
+        (docMsg.fileName && docMsg.fileName.toLowerCase().endsWith('.pdf'))
+    );
+
     const quotedMsg = content?.extendedTextMessage?.contextInfo?.quotedMessage;
     const isQuotedImage = !!quotedMsg?.imageMessage;
+    const quotedDoc = quotedMsg?.documentMessage;
+    const isQuotedDoc = !!quotedDoc;
+    const isQuotedPdf = isQuotedDoc && (
+        quotedDoc.mimetype === 'application/pdf' || 
+        (quotedDoc.fileName && quotedDoc.fileName.toLowerCase().endsWith('.pdf'))
+    );
+
+    const isMedia = isImage || isDoc || isQuotedImage || isQuotedDoc;
+    const mimeType = (isPdf || isQuotedPdf || (isDoc && docMsg?.mimetype === 'application/pdf') || quotedDoc?.mimetype === 'application/pdf') 
+        ? 'application/pdf' 
+        : (docMsg?.mimetype || quotedDoc?.mimetype || 'image/jpeg');
 
     return {
         text: text.trim(),
+        isMedia,
         isImage: isImage || isQuotedImage,
-        imageMessage: content?.imageMessage || quotedMsg?.imageMessage || null,
-        isQuotedImage,
+        isPdf: isPdf || isQuotedPdf,
+        mimeType,
         quotedMsg,
         contextInfo: content?.extendedTextMessage?.contextInfo
     };
@@ -321,7 +317,7 @@ async function startBot() {
                     continue;
                 }
 
-                const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
+                const { text, isMedia, isImage, isPdf, mimeType, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
 
                 // Prevent bot infinite reply loops
@@ -329,37 +325,38 @@ async function startBot() {
                     continue;
                 }
 
-                // Allow self-messages ONLY if sending Aadhaar/PAN image or "hi"
+                // Command Triggers: Aadhaar (A), PAN (P), Jamabandi (J)
                 const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
+                const isJamabandiTag = /^(j|jamabandi|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("जमाबंदी");
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
 
                 if (msg.key.fromMe) {
-                    if (!((isImage && (isAadhaarTag || isPanTag)) || (isExactGreeting && !isImage))) {
+                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag)) || (isExactGreeting && !isMedia))) {
                         continue;
                     }
                 }
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg);
 
-                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
+                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Media: ${isMedia} (${mimeType})`);
 
                 // 1. Strict Greeting only
-                if (isExactGreeting && !isImage) {
+                if (isExactGreeting && !isMedia) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg);
                     continue;
                 }
 
-                // 2. Document Processing (ONLY if caption has aadhar/a or pan/p)
-                if (!isAadhaarTag && !isPanTag) {
+                // 2. Document Processing (ONLY if caption has aadhar/a, pan/p, or jamabandi/j)
+                if (!isAadhaarTag && !isPanTag && !isJamabandiTag) {
                     continue;
                 }
 
                 let targetMsgObj = msg;
                 let quotedRef = null;
 
-                if (isQuotedImage) {
+                if (quotedMsg && (quotedMsg.imageMessage || quotedMsg.documentMessage)) {
                     targetMsgObj = {
                         message: quotedMsg,
                         key: {
@@ -371,10 +368,12 @@ async function startBot() {
                     quotedRef = msg;
                 }
 
-                if (isImage && isAadhaarTag) {
-                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef);
-                } else if (isImage && isPanTag) {
-                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef);
+                if (isMedia && isAadhaarTag) {
+                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                } else if (isMedia && isPanTag) {
+                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                } else if (isMedia && isJamabandiTag) {
+                    await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
                 }
             }
         } catch (err) {
@@ -390,43 +389,50 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
         `*Welcome to Fabkraft Document Assistant*\n` +
         `*Build Version:* \`${APP_VERSION}\`\n\n` +
-        `Send your document images with the appropriate caption to extract data & save automatically:\n\n` +
+        `Send your document image or PDF with the appropriate caption to extract data & save automatically:\n\n` +
         `*Aadhaar Card:*\n` +
         `• Caption: *a* or *aadhar*\n` +
+        `• Format: Image or PDF\n` +
         `• Extracted: Name (English/Hindi), Relation Status, Father/Husband Name, DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
         `*PAN Card:*\n` +
         `• Caption: *p* or *pan*\n` +
+        `• Format: Image or PDF\n` +
         `• Extracted: Name, Father's Name, DOB, PAN No\n\n` +
+        `*Jamabandi (Rajasthan P-26C):*\n` +
+        `• Caption: *j* or *jamabandi*\n` +
+        `• Format: Image or PDF\n` +
+        `• Extracted: Village, Patwar Halka, Tehsil, District, Khata No, Total Area, Khatedar List & Khasra Plots\n\n` +
         `Powered by FabKraft AI`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
 
 /**
- * Handles Aadhaar Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
+ * Handles Aadhaar Upload (Image/PDF) + Gemini Structured AI Extraction
  */
-async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini for ${senderMobile}...`);
+async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
+    logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with Gemini for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `Aadhaar Card detected. Extracting details and saving...`
-    }, { quoted: quotedRef || imageMsgObj });
+    }, { quoted: quotedRef || mediaMsgObj });
 
     try {
         const buffer = await downloadMediaMessage(
-            imageMsgObj,
+            mediaMsgObj,
             'buffer',
             {},
             { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
         );
 
         const timestamp = Date.now();
-        const fileName = `aadhar_${senderMobile}_${timestamp}.jpg`;
+        const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
+        const fileName = `aadhar_${senderMobile}_${timestamp}.${ext}`;
 
         // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
-            uploadToFabkraft(buffer, fileName, 'aadhar'),
-            extractAadhaarWithGemini(buffer)
+            uploadToFabkraft(buffer, fileName, 'aadhar', mimeType),
+            extractAadhaarWithGemini(buffer, mimeType)
         ]);
 
         if (!uploadResult.success) {
@@ -529,42 +535,43 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             `*Accuracy Score:* ${accuracy.overall}%\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
+        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("AADHAAR_SUCCESS", `Aadhaar processed with ID #${uploadId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
             text: `Processing Failed: ${err.message}. Please try again.`
-        }, { quoted: quotedRef || imageMsgObj });
+        }, { quoted: quotedRef || mediaMsgObj });
     }
 }
 
 /**
- * Handles PAN Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
+ * Handles PAN Upload (Image/PDF) + Gemini Structured AI Extraction
  */
-async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("PAN_START", `Processing PAN with Gemini for ${senderMobile}...`);
+async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
+    logEvent("PAN_START", `Processing PAN (${mimeType}) with Gemini for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `PAN Card detected. Extracting details and saving...`
-    }, { quoted: quotedRef || imageMsgObj });
+    }, { quoted: quotedRef || mediaMsgObj });
 
     try {
         const buffer = await downloadMediaMessage(
-            imageMsgObj,
+            mediaMsgObj,
             'buffer',
             {},
             { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
         );
 
         const timestamp = Date.now();
-        const fileName = `pan_${senderMobile}_${timestamp}.jpg`;
+        const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
+        const fileName = `pan_${senderMobile}_${timestamp}.${ext}`;
 
         // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
-            uploadToFabkraft(buffer, fileName, 'pan'),
-            extractPanWithGemini(buffer)
+            uploadToFabkraft(buffer, fileName, 'pan', mimeType),
+            extractPanWithGemini(buffer, mimeType)
         ]);
 
         if (!uploadResult.success) {
@@ -609,14 +616,130 @@ async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, qu
             `*PAN Number:* ${displayVal(details.panNumber)}\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
+        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("PAN_SUCCESS", `PAN processed with ID #${uploadId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
             text: `Processing Failed: ${err.message}. Please try again.`
-        }, { quoted: quotedRef || imageMsgObj });
+        }, { quoted: quotedRef || mediaMsgObj });
+    }
+}
+
+/**
+ * Handles Jamabandi Upload (Image/PDF) + Gemini Universal Property Registry Extraction
+ */
+async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
+    logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with Gemini for ${senderMobile}...`);
+
+    await sock.sendMessage(replyJid, {
+        text: `Jamabandi Document detected. Extracting land records and saving...`
+    }, { quoted: quotedRef || mediaMsgObj });
+
+    try {
+        const buffer = await downloadMediaMessage(
+            mediaMsgObj,
+            'buffer',
+            {},
+            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
+        );
+
+        const timestamp = Date.now();
+        const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
+        const fileName = `jamabandi_${senderMobile}_${timestamp}.${ext}`;
+
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
+        const [uploadResult, geminiResult] = await Promise.all([
+            uploadToFabkraft(buffer, fileName, 'jamabandi', mimeType),
+            extractJamabandiWithGemini(buffer, mimeType)
+        ]);
+
+        if (!uploadResult.success) {
+            throw new Error(`Server upload failed: ${uploadResult.error}`);
+        }
+
+        const uploadUri = uploadResult.uploadUri;
+        const details = geminiResult.data || {};
+        const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
+        const accuracy = geminiResult.accuracy || 100;
+
+        const docId = details.khataNoNew ? `KHATA-${details.khataNoNew}` : `DOC${timestamp.toString().slice(-6)}`;
+
+        // 2. Insert record into wh_uploads
+        const uploadId = await logImageUpload({
+            receiverMobile: currentBotNumber,
+            senderMobile: senderMobile,
+            imageCaption: 'Jamabandi',
+            imageId: docId,
+            uploadUri: uploadUri
+        });
+
+        // 3. Insert record into wh_jamabandi_records
+        await insertJamabandiRecord({
+            uploadId,
+            formName: details.formName,
+            documentType: details.documentType,
+            village: details.village,
+            patwarHalka: details.patwarHalka,
+            landInspectorCircle: details.landInspectorCircle,
+            tehsil: details.tehsil,
+            district: details.district,
+            landHolder: details.landHolder,
+            samvatPeriod: details.samvatPeriod,
+            areaUnit: details.areaUnit,
+            khataNoNew: details.khataNoNew,
+            khataNoOld: details.khataNoOld,
+            totalKhasraCount: details.totals?.totalKhasraCount,
+            totalArea: details.totals?.totalArea,
+            totalRent: details.totals?.totalRent,
+            khatedarDetails: details.khatedarDetails,
+            khasraDetails: details.khasraDetails,
+            rawJson: geminiResult.rawJson,
+            tokensPrompt: tokens.promptTokens,
+            tokensCompletion: tokens.candidatesTokens,
+            tokensTotal: tokens.totalTokens,
+            aiModel: geminiResult.model,
+            accuracyOverall: accuracy,
+            senderMobile: senderMobile,
+            receiverMobile: currentBotNumber,
+            documentUri: uploadUri,
+            mimeType: mimeType
+        });
+
+        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+
+        const khatedars = Array.isArray(details.khatedarDetails) ? details.khatedarDetails : [];
+        const khasras = Array.isArray(details.khasraDetails) ? details.khasraDetails : [];
+
+        let khatedarSummary = "";
+        if (khatedars.length > 0) {
+            khatedarSummary = `*Khatedars (${khatedars.length}):* ` + khatedars.slice(0, 3).map(k => k.name).filter(Boolean).join(", ") + (khatedars.length > 3 ? ` + ${khatedars.length - 3} more` : "") + "\n";
+        }
+
+        const replyText = 
+            `*JAMABANDI EXTRACTED & SAVED*\n\n` +
+            `*Upload ID:* #${uploadId}\n` +
+            `*Sent By:* ${senderMobile}\n\n` +
+            `*Village (ग्राम):* ${displayVal(details.village)}\n` +
+            `*Patwar Halka:* ${displayVal(details.patwarHalka)}\n` +
+            `*Tehsil (तहसील):* ${displayVal(details.tehsil)}\n` +
+            `*District (जिला):* ${displayVal(details.district)}\n` +
+            `*Khata No (New / Old):* ${displayVal(details.khataNoNew)} / ${displayVal(details.khataNoOld)}\n` +
+            `*Total Area:* ${displayVal(details.totals?.totalArea)} ${details.areaUnit || ''}\n` +
+            `*Total Khasra Count:* ${details.totals?.totalKhasraCount || khasras.length || 'Not Found'}\n` +
+            khatedarSummary +
+            `*Accuracy Score:* ${accuracy}%\n\n` +
+            `Powered by FabKraft AI`;
+
+        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        logEvent("JAMABANDI_SUCCESS", `Jamabandi processed with ID #${uploadId} for ${senderMobile}`);
+
+    } catch (err) {
+        logEvent("JAMABANDI_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        await sock.sendMessage(replyJid, {
+            text: `Processing Failed: ${err.message}. Please try again.`
+        }, { quoted: quotedRef || mediaMsgObj });
     }
 }
 

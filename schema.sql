@@ -93,3 +93,47 @@ CREATE TABLE IF NOT EXISTS `wh_baileys_auth` (
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------------------
+-- 5. Rajasthan Jamabandi (P-26C) Detailed Records Table
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `wh_jamabandi_records` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+    `form_name` VARCHAR(255) DEFAULT NULL,
+    `document_type` VARCHAR(255) DEFAULT NULL,
+    `village` VARCHAR(255) DEFAULT NULL,
+    `patwar_halka` VARCHAR(255) DEFAULT NULL,
+    `land_inspector_circle` VARCHAR(255) DEFAULT NULL,
+    `tehsil` VARCHAR(255) DEFAULT NULL,
+    `district` VARCHAR(255) DEFAULT NULL,
+    `land_holder` VARCHAR(255) DEFAULT NULL,
+    `samvat_period` VARCHAR(255) DEFAULT NULL,
+    `area_unit` VARCHAR(50) DEFAULT NULL,
+    `khata_no_new` VARCHAR(50) DEFAULT NULL,
+    `khata_no_old` VARCHAR(50) DEFAULT NULL,
+    `total_khasra_count` INT DEFAULT 0,
+    `total_area` VARCHAR(50) DEFAULT NULL,
+    `total_rent` VARCHAR(50) DEFAULT NULL,
+    `khatedar_count` INT DEFAULT 0,
+    `khatedar_details` LONGTEXT DEFAULT NULL,
+    `khasra_details` LONGTEXT DEFAULT NULL,
+    `raw_json` LONGTEXT DEFAULT NULL,
+    `tokens_prompt` INT DEFAULT 0,
+    `tokens_completion` INT DEFAULT 0,
+    `tokens_total` INT DEFAULT 0,
+    `ai_model` VARCHAR(100) DEFAULT NULL,
+    `accuracy_overall` INT DEFAULT 100,
+    `sender_mobile` VARCHAR(25) NOT NULL,
+    `receiver_mobile` VARCHAR(25) NOT NULL,
+    `document_uri` VARCHAR(500) DEFAULT NULL,
+    `mime_type` VARCHAR(50) DEFAULT 'image/jpeg',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_village` (`village`),
+    INDEX `idx_tehsil` (`tehsil`),
+    INDEX `idx_district` (`district`),
+    INDEX `idx_khata_new` (`khata_no_new`),
+    INDEX `idx_sender_mobile` (`sender_mobile`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+

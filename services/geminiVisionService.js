@@ -104,12 +104,14 @@ const MODELS = [
 
 /**
  * Extracts structured Aadhaar details using Gemini Flash with exact enterprise prompt & token tracking
- * @param {Buffer} buffer - Image buffer
+ * @param {Buffer} buffer - Image or PDF buffer
+ * @param {string} mimeType - 'image/jpeg', 'image/png', or 'application/pdf'
  * @returns {Promise<Object>}
  */
-async function extractAadhaarWithGemini(buffer) {
+async function extractAadhaarWithGemini(buffer, mimeType = 'image/jpeg') {
     const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
+    const actualMime = mimeType || 'image/jpeg';
 
     const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN).
 
@@ -193,7 +195,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     { text: userPrompt },
                     {
                         inlineData: {
-                            mimeType: 'image/jpeg',
+                            mimeType: actualMime,
                             data: base64Data
                         }
                     }
@@ -412,15 +414,17 @@ Output ONLY raw valid JSON without markdown formatting.`;
 }
 
 /**
- * Extracts structured PAN details using Gemini 3.1 Flash-Lite with automatic Vision fallback
- * @param {Buffer} buffer - Image buffer
+ * Extracts structured PAN details using Gemini with automatic Vision fallback
+ * @param {Buffer} buffer - Image or PDF buffer
+ * @param {string} mimeType - 'image/jpeg' or 'application/pdf'
  * @returns {Promise<Object>}
  */
-async function extractPanWithGemini(buffer) {
+async function extractPanWithGemini(buffer, mimeType = 'image/jpeg') {
     const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
+    const actualMime = mimeType || 'image/jpeg';
     const prompt = `
-Analyze this Indian PAN Card image and extract the following details into valid JSON format.
+Analyze this Indian PAN Card document and extract the following details into valid JSON format.
 If a field is not visible or not found, set its value to null.
 
 JSON Schema:
@@ -441,7 +445,7 @@ Output ONLY raw valid JSON without markdown formatting.
                     { text: prompt },
                     {
                         inlineData: {
-                            mimeType: 'image/jpeg',
+                            mimeType: actualMime,
                             data: base64Data
                         }
                     }
@@ -454,7 +458,7 @@ Output ONLY raw valid JSON without markdown formatting.
         }
     };
 
-    // 1. Try Gemini 3.1 Flash-Lite & latest models
+    // 1. Try Gemini models
     for (const model of MODELS) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -505,7 +509,163 @@ Output ONLY raw valid JSON without markdown formatting.
     }
 }
 
+/**
+ * Extracts structured Rajasthan Jamabandi (P-26C) land records using Gemini Universal Registry Schema
+ * @param {Buffer} buffer - Image or PDF buffer
+ * @param {string} mimeType - 'application/pdf' or 'image/jpeg'
+ * @returns {Promise<Object>}
+ */
+async function extractJamabandiWithGemini(buffer, mimeType = 'image/jpeg') {
+    const apiKey = await getGeminiApiKey();
+    const base64Data = buffer.toString('base64');
+    const actualMime = mimeType || 'image/jpeg';
+
+    const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN).
+
+Strict Rules:
+1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array.
+2. MAPPING KEYS: You MUST accurately identify the 'party_type' (property, buyer, seller, witness) and 'document_type' (old_jamabandi, aadhaar_card, pan_card) to match the system checklist.
+3. CONDITIONAL POPULATION: Depending on the 'document_type', fill ONLY the corresponding data object ('old_jamabandi_data', 'aadhaar_card_data', or 'pan_card_data') and leave the others null.
+4. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling, archaic legal terms, or names.
+5. ZERO FABRICATION: If a field or table cell is missing or unreadable, set it to empty string ''. Never guess digits or dates.
+6. NUMERIC ACCURACY: Extract all land areas, rent amounts, account numbers, and dates using standard Arabic numerals (0-9). Preserve exact decimal precision.
+7. ACCURACY SCORE: Evaluate your own confidence (0-100) and return it in 'accuracyFields'.`;
+
+    const userPrompt = `Extract this Rajasthan Jamabandi document (P-26C / प्रपत्र पी-26 सी) into the following exact JSON schema:
+{
+  "extracted_documents": [
+    {
+      "party_type": "property",
+      "document_type": "old_jamabandi",
+      "old_jamabandi_data": {
+        "formName": "Header form code e.g. प्रपत्र पी-26 (सी) (देखिये नियम 153 ए)",
+        "documentType": "Document title e.g. जमाबन्दी (प्रतिलिपि)",
+        "village": "Village name following 'ग्राम का नाम :-'",
+        "patwarHalka": "Patwar Halka name",
+        "landInspectorCircle": "Land Inspector Circle (भू.अभि.नि.)",
+        "tehsil": "Tehsil name",
+        "district": "District name",
+        "landHolder": "Land holder name following 'भूमि धारक का नाम :-'",
+        "samvatPeriod": "Settlement years / Samvat text line",
+        "areaUnit": "Unit of measurement e.g. हैक्टेयर or बीघा",
+        "khataNoNew": "New Khata number",
+        "khataNoOld": "Old Khata number",
+        "khatedarDetails": [
+          {
+            "sNo": 1,
+            "name": "Name of Khatedar",
+            "fatherName": "Father or husband name",
+            "share": "Ownership share ratio e.g. 1/3 or 1/1",
+            "caste": "Caste/Jaati",
+            "residence": "Address / Residence",
+            "khatedarType": "Tenure type e.g. खातेदार",
+            "rawText": "Complete verbatim text line for this tenant entry"
+          }
+        ],
+        "khasraDetails": [
+          {
+            "rowIndex": 1,
+            "khasraNo": "Survey plot number",
+            "area": "Plot area",
+            "area_sold": "",
+            "landClassification": "Soil classification",
+            "rent": "Rent payable",
+            "irrigationSource": "Irrigation means",
+            "mutationDetails": "Mutation reference",
+            "remarks": "Remarks"
+          }
+        ],
+        "totals": {
+          "totalKhasraCount": 1,
+          "totalArea": "Total area sum",
+          "totalRent": "Total rent sum"
+        }
+      }
+    }
+  ],
+  "accuracy_overall": 100
+}
+
+Output ONLY raw valid JSON without markdown formatting.`;
+
+    const requestBody = {
+        systemInstruction: {
+            parts: [
+                { text: systemPrompt }
+            ]
+        },
+        contents: [
+            {
+                parts: [
+                    { text: userPrompt },
+                    {
+                        inlineData: {
+                            mimeType: actualMime,
+                            data: base64Data
+                        }
+                    }
+                ]
+            }
+        ],
+        generationConfig: {
+            temperature: 0.0,
+            responseMimeType: "application/json"
+        }
+    };
+
+    for (const model of MODELS) {
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const response = await axios.post(url, requestBody, {
+                headers: buildGeminiHeaders(apiKey),
+                timeout: 45000
+            });
+
+            const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            
+            const rawUsage = response.data?.usageMetadata || response.data?.usage || {};
+            const promptTokens = Number(rawUsage.promptTokenCount ?? rawUsage.prompt_token_count ?? 0);
+            const candidatesTokens = Number(rawUsage.candidatesTokenCount ?? rawUsage.candidates_token_count ?? 0);
+            const totalTokens = Number(rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? (promptTokens + candidatesTokens));
+
+            const tokens = { promptTokens, candidatesTokens, totalTokens };
+            const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+            const parsed = JSON.parse(cleaned);
+
+            let jData = null;
+            let overallAcc = parsed.accuracy_overall || 100;
+
+            const docList = parsed.extracted_documents || [];
+            if (Array.isArray(docList) && docList.length > 0) {
+                const item = docList.find(d => d.document_type === 'old_jamabandi' || d.old_jamabandi_data) || docList[0];
+                jData = item.old_jamabandi_data || item;
+            } else if (parsed.old_jamabandi_data) {
+                jData = parsed.old_jamabandi_data;
+            } else {
+                jData = parsed;
+            }
+
+            console.log(`✅ [Gemini] Successfully extracted Jamabandi using ${model} (Tokens: ${totalTokens})`);
+            return {
+                success: true,
+                model,
+                engine: `Gemini (${model})`,
+                tokens,
+                accuracy: overallAcc,
+                data: jData,
+                rawJson: parsed
+            };
+
+        } catch (err) {
+            console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, err.response?.data?.error?.message || err.message);
+        }
+    }
+
+    throw new Error('All Gemini models failed to extract Jamabandi document.');
+}
+
 module.exports = {
     extractAadhaarWithGemini,
-    extractPanWithGemini
+    extractPanWithGemini,
+    extractJamabandiWithGemini
 };

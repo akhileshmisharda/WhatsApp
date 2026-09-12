@@ -18,10 +18,13 @@ const httpAgent = new http.Agent();
  * @param {string} category - Category subfolder ('aadhar', 'pan', 'general')
  * @returns {Promise<{success: boolean, uploadUri?: string, error?: string}>}
  */
-async function uploadToFabkraft(buffer, fileName, category = 'general') {
+async function uploadToFabkraft(buffer, fileName, category = 'general', mimeType = null) {
     try {
+        const isPdf = fileName.toLowerCase().endsWith('.pdf') || mimeType === 'application/pdf';
+        const contentType = mimeType || (isPdf ? 'application/pdf' : 'image/jpeg');
+
         const form = new FormData();
-        form.append('file', buffer, { filename: fileName, contentType: 'image/jpeg' });
+        form.append('file', buffer, { filename: fileName, contentType: contentType });
         form.append('fileName', fileName);
         form.append('category', category);
 
