@@ -34,6 +34,7 @@ let currentBotNumber = "Unknown";
 let connectionStatus = "initializing";
 let lastConnectedAt = null;
 let lastQrGeneratedAt = null;
+const botStartTime = Math.floor(Date.now() / 1000);
 const eventLogs = [];
 
 function logEvent(type, message, data = null) {
@@ -247,8 +248,22 @@ async function startBot() {
             for (const msg of messages) {
                 if (!msg.message) continue;
 
+                // 1. Never reply to own messages
+                if (msg.key.fromMe) continue;
+
                 const senderJid = msg.key.remoteJid;
                 if (!senderJid || senderJid === 'status@broadcast') continue;
+
+                // 2. NEVER reply to WhatsApp Groups
+                if (senderJid.endsWith('@g.us')) continue;
+
+                // 3. Ignore old/historic synced messages (only process live messages)
+                const msgTimestamp = typeof msg.messageTimestamp === 'number' 
+                    ? msg.messageTimestamp 
+                    : (msg.messageTimestamp?.low || 0);
+                if (msgTimestamp && msgTimestamp < (botStartTime - 5)) {
+                    continue;
+                }
 
                 const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.toLowerCase();
@@ -256,7 +271,7 @@ async function startBot() {
 
                 logEvent("MESSAGE_IN", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
 
-                // 1. Menu / Greeting trigger
+                // 4. Explicit Greeting/Menu trigger only
                 const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
                 if (isGreetingOrMenu && !isImage) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
@@ -264,7 +279,7 @@ async function startBot() {
                     continue;
                 }
 
-                // 2. Document Tag Detection
+                // 5. Document Tag Detection
                 const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = captionText.includes("pan");
 
@@ -291,8 +306,6 @@ async function startBot() {
                     await sock.sendMessage(senderJid, {
                         text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
                     }, { quoted: msg });
-                } else if (!isImage && captionText.length > 0) {
-                    await sendMenuResponse(sock, senderJid, msg);
                 }
             }
         } catch (err) {
