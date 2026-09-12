@@ -191,30 +191,20 @@ async function insertOrUpdateAadhaar({
     try {
         let existing = null;
 
-        // 1. Primary Lookup: Exact Aadhaar Number (if valid 12-digit)
-        if (payload.aadhar_number) {
+        // 1. Strict Lookup: Exact valid 12-digit Aadhaar Number ONLY (Format: "XXXX XXXX XXXX")
+        if (payload.aadhar_number && /^\d{4}\s\d{4}\s\d{4}$/.test(payload.aadhar_number)) {
             const [rows] = await pool.execute(
                 'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
             );
-            if (rows.length > 0) existing = rows[0];
-        }
-
-        // 2. Secondary Lookup for Back Scans: Match open record with missing back_image_uri from same sender
-        if (!existing && isBackScan && cleanSender !== 'Unknown') {
-            const [recentRows] = await pool.execute(
-                `SELECT * FROM wh_aadhar_records 
-                 WHERE sender_mobile = ? 
-                   AND created_at >= (NOW() - INTERVAL 30 MINUTE)
-                   AND front_image_uri IS NOT NULL 
-                   AND back_image_uri IS NULL
-                 ORDER BY created_at DESC LIMIT 1`,
-                [cleanSender]
-            );
-            if (recentRows.length > 0) {
-                existing = recentRows[0];
-                console.log(`🔗 [Aadhaar Merge] Merging back scan into front record ID #${existing.id} for sender ${cleanSender}`);
+            if (rows.length > 0) {
+                existing = rows[0];
+                console.log(`🔍 [Aadhaar Match] Found existing record ID #${existing.id} matching Aadhaar "${payload.aadhar_number}"`);
+            } else {
+                console.log(`ℹ️ [Aadhaar No Match] Aadhaar "${payload.aadhar_number}" not in DB -> Inserting new record`);
             }
+        } else {
+            console.log(`ℹ️ [Aadhaar No 12-Digit Number] Extracted value "${payload.aadhar_number}" is not a valid 12-digit Aadhaar -> Inserting new record`);
         }
 
         // Case A: New Record -> INSERT (Populate ONLY ONE image field at first time)

@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.5-NON-OVERLAPPING-IMAGES";
+const APP_VERSION = "v4.9.7-STRICT-AADHAAR-MATCH";
 
 let sock = null;
 let currentBotNumber = "Unknown";
