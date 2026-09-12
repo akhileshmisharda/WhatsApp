@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.3.0-DYNAMIC-KEY-FABKRAFT";
+const APP_VERSION = "v4.4.0-REGISTRY-AUTH-AI";
 
 let sock = null;
 let currentBotNumber = "Unknown";

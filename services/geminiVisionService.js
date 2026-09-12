@@ -12,10 +12,13 @@ let lastKeyFetchTime = 0;
 
 const pool = require('./db');
 
+const KEY_ENDPOINT = 'https://fabkraft.in/registry/get_gemini_key.php';
+const APP_TOKEN = 'gen-lang-client-0516447089';
+
 /**
  * Dynamically fetches the Gemini API key:
  * 1. Checks memory cache
- * 2. Tries https://fabkraft.in/get_gemini_key.php
+ * 2. Fetches from https://fabkraft.in/registry/get_gemini_key.php with X-App-Token
  * 3. Tries MySQL table `wh_baileys_auth` WHERE id = 'gemini_api_key'
  * 4. Checks process.env.GEMINI_API_KEY
  */
@@ -25,30 +28,38 @@ async function getGeminiApiKey() {
         return cachedGeminiKey;
     }
 
-    // 1. Try fetching from fabkraft.in/get_gemini_key.php
+    // 1. Try fetching from fabkraft.in/registry/get_gemini_key.php
     try {
-        console.log('🔑 [GeminiKey] Fetching API key from https://fabkraft.in/get_gemini_key.php...');
-        const res = await axios.get('https://fabkraft.in/get_gemini_key.php', {
+        console.log(`🔑 [GeminiKey] Fetching API key from ${KEY_ENDPOINT}...`);
+        const res = await axios.get(KEY_ENDPOINT, {
+            headers: {
+                'X-App-Token': APP_TOKEN
+            },
             httpsAgent,
             timeout: 8000
         });
 
         let key = null;
         if (typeof res.data === 'string') {
-            key = res.data.trim();
+            try {
+                const parsed = JSON.parse(res.data);
+                key = parsed.api_key || parsed.key || parsed.gemini_key;
+            } catch {
+                key = res.data.trim();
+            }
         } else if (typeof res.data === 'object' && res.data !== null) {
-            key = res.data.key || res.data.api_key || res.data.gemini_key || res.data.apiKey || Object.values(res.data)[0];
+            key = res.data.api_key || res.data.key || res.data.gemini_key || res.data.apiKey || Object.values(res.data)[0];
         }
 
-        // Validate that it looks like a valid key and not HTML error page
+        // Validate that it looks like a valid key
         if (key && typeof key === 'string' && !key.includes('<html') && key.trim().length > 10) {
             cachedGeminiKey = key.trim();
             lastKeyFetchTime = now;
-            console.log(`✅ [GeminiKey] Successfully loaded dynamic key from HTTP (Prefix: ${cachedGeminiKey.substring(0, 6)}...)`);
+            console.log(`✅ [GeminiKey] Successfully loaded dynamic key from HTTP registry (Prefix: ${cachedGeminiKey.substring(0, 8)}...)`);
             return cachedGeminiKey;
         }
     } catch (err) {
-        console.warn(`⚠️ [GeminiKey] HTTP fetch failed:`, err.message);
+        console.warn(`⚠️ [GeminiKey] HTTP fetch failed:`, err.response?.data || err.message);
     }
 
     // 2. Try fetching from MySQL table wh_baileys_auth
@@ -59,7 +70,7 @@ async function getGeminiApiKey() {
             if (dbKey.length > 10) {
                 cachedGeminiKey = dbKey;
                 lastKeyFetchTime = now;
-                console.log(`✅ [GeminiKey] Loaded key from MySQL (Prefix: ${cachedGeminiKey.substring(0, 6)}...)`);
+                console.log(`✅ [GeminiKey] Loaded key from MySQL (Prefix: ${cachedGeminiKey.substring(0, 8)}...)`);
                 return cachedGeminiKey;
             }
         }
@@ -68,6 +79,19 @@ async function getGeminiApiKey() {
     }
 
     return cachedGeminiKey || process.env.GEMINI_API_KEY || '';
+}
+
+function buildGeminiHeaders(apiKey) {
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (apiKey) {
+        headers['x-goog-api-key'] = apiKey;
+        if (apiKey.startsWith('AQ.') || apiKey.startsWith('ya29.')) {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+    }
+    return headers;
 }
 
 // Prioritize Gemini 3.1 Flash-Lite & latest Flash-Lite vision models
@@ -135,10 +159,7 @@ Output ONLY raw valid JSON without markdown formatting.
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': apiKey
-                },
+                headers: buildGeminiHeaders(apiKey),
                 timeout: 15000
             });
 
@@ -239,10 +260,7 @@ Output ONLY raw valid JSON without markdown formatting.
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': apiKey
-                },
+                headers: buildGeminiHeaders(apiKey),
                 timeout: 15000
             });
 
