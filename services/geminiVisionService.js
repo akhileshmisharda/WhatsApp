@@ -94,8 +94,10 @@ function buildGeminiHeaders(apiKey) {
     return headers;
 }
 
-// Working official Gemini vision models on Google AI API
+// Working official Gemini vision models on Google AI API (prioritizing 3.1 & 2.0 Flash)
 const MODELS = [
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash',
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
     'gemini-1.5-flash',
