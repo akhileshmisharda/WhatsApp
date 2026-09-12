@@ -21,8 +21,10 @@ const { uploadToFabkraft } = require('./services/uploadService');
 const { logImageUpload } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
-// 1. STATE & EVENT LOGS
+// 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
+const APP_VERSION = "v3.0.0-PROD";
+
 let sock = null;
 let currentBotNumber = "Unknown";
 let connectionStatus = "initializing";
@@ -53,6 +55,7 @@ app.use(express.json());
 app.get('/', (req, res) => {
     res.json({
         service: 'Fabkraft WhatsApp Document Uploader',
+        version: APP_VERSION,
         server_status: 'online',
         whatsapp_status: connectionStatus,
         bot_number: currentBotNumber,
@@ -65,6 +68,7 @@ app.get('/', (req, res) => {
 
 app.get('/logs', (req, res) => {
     res.json({
+        version: APP_VERSION,
         whatsapp_status: connectionStatus,
         bot_number: currentBotNumber,
         is_socket_ready: !!sock?.user,
@@ -89,11 +93,12 @@ app.get('/send-test', async (req, res) => {
         const jid = `${targetMobile}@s.whatsapp.net`;
         logEvent("OUTGOING_TEST", `Sending test message to ${jid}`, { text });
 
-        const result = await sock.sendMessage(jid, { text: `🤖 *Test Message:*\n${text}` });
+        const result = await sock.sendMessage(jid, { text: `🤖 *Test Message (${APP_VERSION}):*\n${text}` });
         logEvent("OUTGOING_SUCCESS", `Test message delivered to ${jid}`);
 
         res.json({
             success: true,
+            version: APP_VERSION,
             message: `Test message sent to ${targetMobile}`,
             resultId: result?.key?.id,
             status: connectionStatus
@@ -110,7 +115,7 @@ app.get('/send-test', async (req, res) => {
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(PORT, () => {
-    logEvent("SERVER", `Express server listening on port ${PORT}`);
+    logEvent("SERVER", `Express server listening on port ${PORT} [Version: ${APP_VERSION}]`);
 });
 
 // ---------------------------------------------------------
@@ -159,7 +164,7 @@ function getMessageDetails(msg) {
 // 4. WHATSAPP BOT ENGINE
 // ---------------------------------------------------------
 async function startBot() {
-    logEvent("WHATSAPP_INIT", "Starting WhatsApp Socket with MySQL Auth State...");
+    logEvent("WHATSAPP_INIT", `Starting WhatsApp Socket (${APP_VERSION}) with MySQL Auth State...`);
     connectionStatus = "connecting";
 
     let authState, saveCreds;
@@ -321,17 +326,19 @@ async function startBot() {
 }
 
 /**
- * Sends a helpful menu guide to the user
+ * Sends a helpful menu guide to the user with Version ID
  */
 async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
-        `👋 *Welcome to Fabkraft Document Uploader!*\n\n` +
+        `👋 *Welcome to Fabkraft Document Uploader!*\n` +
+        ` *Build Version:* \`${APP_VERSION}\`\n\n` +
         `Send your document images with the appropriate caption to upload directly to Fabkraft ERP:\n\n` +
         `🪪 *Aadhaar Card:*\n` +
         `• Send image with caption *\`aadhar\`* or *\`adhar\`*\n\n` +
         `💳 *PAN Card:*\n` +
         `• Send image with caption *\`pan\`*\n\n` +
-        `🌐 *Storage:* All files are stored at \`fabkraft.in/WhatsAppFolder/uploads/\` and saved with an Upload ID.`;
+        `🌐 *Storage:* All files are stored at \`fabkraft.in/WhatsAppFolder/uploads/\` and saved with an Upload ID.\n\n` +
+        `_Active on Google Cloud Run_`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
@@ -379,7 +386,8 @@ async function handleDirectUpload(sock, imageMsgObj, replyJid, senderMobile, doc
             `📁 *Document Type:* ${docTitle}\n` +
             `📱 *Bot Account:* ${currentBotNumber}\n` +
             `📲 *Sent By:* ${senderMobile}\n` +
-            `📅 *Uploaded At:* ${dateStr}\n\n` +
+            `📅 *Uploaded At:* ${dateStr}\n` +
+            `🔖 *Version:* \`${APP_VERSION}\`\n\n` +
             `🌐 *Server Link:*\n${uploadUri}`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
