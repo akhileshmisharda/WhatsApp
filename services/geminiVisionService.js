@@ -106,44 +106,72 @@ const MODELS = [
 ];
 
 /**
- * Extracts structured Aadhaar details using Gemini 3.1 Flash-Lite with automatic Vision fallback
+ * Extracts structured Aadhaar details using Gemini 3.1 Flash-Lite with exact enterprise prompt & token tracking
  * @param {Buffer} buffer - Image buffer
  * @returns {Promise<Object>}
  */
 async function extractAadhaarWithGemini(buffer) {
     const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
-    const prompt = `
-Analyze this Indian Aadhaar Card image and extract the following details into valid JSON format matching the schema below.
-If a field is not visible or not found, set its value to null.
 
-JSON Schema:
+    const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN).
+
+Strict Rules:
+1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array.
+2. MAPPING KEYS: You MUST accurately identify the 'party_type' (property, buyer, seller, witness, unassigned) and 'document_type' (sale_deed, aadhaar_card, pan_card) to match the system checklist.
+3. CONDITIONAL POPULATION: Depending on the 'document_type', fill ONLY the corresponding data object ('sale_deed_data', 'aadhaar_card_data', or 'pan_card_data') and leave the others null.
+4. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling, archaic legal terms, or names.
+5. ZERO FABRICATION: If a field or table cell is missing or unreadable, set it to empty string ''. Never guess digits or dates.
+6. NUMERIC ACCURACY: Extract all land areas, rent amounts, account numbers, and dates using standard Arabic numerals (0-9). Preserve exact decimal precision.
+7. ACCURACY SCORE: Evaluate your own confidence (0-100) and return it in 'accuracyFields'.
+8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only. Do not translate Hindi names, addresses, or boundaries into English.`;
+
+    const userPrompt = `Extract this document scan into the following exact JSON schema:
 {
-  "aadhaar_card_data": {
-    "aadhaarNumber": "12-digit format, e.g. XXXX XXXX XXXX or null",
-    "fullName_English": "Full name in English exactly as printed or null",
-    "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or null",
-    "dob": "Date of birth in DD/MM/YYYY format or Year of birth or null",
-    "gender": "Extract gender (e.g., MALE, FEMALE, पुरुष, महिला) or null",
-    "fatherName_English": "Extract name in English ONLY if listed after S/O, D/O, or C/O. Leave null if W/O is used.",
-    "fatherName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave null if W/O is used.",
-    "husbandName_English": "Extract name in English ONLY if listed after W/O (Wife of). Leave null if S/O, D/O, or C/O is used.",
-    "husbandName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave null if S/O, D/O, or C/O is used.",
-    "fullAddress_English": "Complete address in English or null",
-    "fullAddress_Hindi": "Complete address in Hindi (Devanagari script) or null",
-    "pincode": "6-digit Indian postal PIN code or null",
-    "pancard": null
-  }
+  "extracted_documents": [
+    {
+      "party_type": "buyer",
+      "document_type": "aadhaar_card",
+      "accuracyFields": {
+        "aadhaarNumber": "100",
+        "fullName_English": "100",
+        "fullName_Hindi": "100",
+        "dob": "100",
+        "fatherName_Hindi": "100",
+        "husbandName_Hindi": "100",
+        "pincode": "100"
+      },
+      "aadhaar_card_data": {
+        "aadhaarNumber": "12-digit format, e.g. XXXX XXXX XXXX",
+        "fullName_English": "Extract full name in English exactly as printed.",
+        "fullName_Hindi": "Extract full name in Hindi (Devanagari script) exactly as printed.",
+        "dob": "DD/MM/YYYY or YYYY",
+        "gender": "Extract gender (e.g., MALE, FEMALE, पुरुष, महिला)",
+        "fatherName_English": "Extract name in English ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
+        "fatherName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
+        "husbandName_English": "Extract name in English ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
+        "husbandName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
+        "fullAddress_English": "Extract complete address in English.",
+        "fullAddress_Hindi": "Extract complete address in Hindi (Devanagari script).",
+        "pincode": "6-digit PIN code",
+        "pancard": ""
+      }
+    }
+  ]
 }
 
-Output ONLY raw valid JSON without markdown formatting.
-`;
+Output ONLY raw valid JSON.`;
 
     const requestBody = {
+        system_instruction: {
+            parts: [
+                { text: systemPrompt }
+            ]
+        },
         contents: [
             {
                 parts: [
-                    { text: prompt },
+                    { text: userPrompt },
                     {
                         inline_data: {
                             mime_type: 'image/jpeg',
@@ -154,7 +182,7 @@ Output ONLY raw valid JSON without markdown formatting.
             }
         ],
         generationConfig: {
-            temperature: 0.1,
+            temperature: 0.0,
             response_mime_type: "application/json"
         }
     };
@@ -165,26 +193,48 @@ Output ONLY raw valid JSON without markdown formatting.
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
-                timeout: 15000
+                timeout: 25000
             });
 
             const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            const usage = response.data?.usageMetadata || {};
+            const tokens = {
+                promptTokens: usage.promptTokenCount || 0,
+                candidatesTokens: usage.candidatesTokenCount || 0,
+                totalTokens: usage.totalTokenCount || 0
+            };
+
             const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
             const parsed = JSON.parse(cleaned);
 
-            const cardData = parsed.aadhaar_card_data || parsed;
+            // Extract document data from array or direct object
+            let cardData = null;
+            let accuracyFields = {};
+            if (Array.isArray(parsed.extracted_documents) && parsed.extracted_documents.length > 0) {
+                const doc = parsed.extracted_documents.find(d => d.document_type === 'aadhaar_card' || d.aadhaar_card_data) || parsed.extracted_documents[0];
+                if (doc) {
+                    cardData = doc.aadhaar_card_data || doc;
+                    accuracyFields = doc.accuracyFields || {};
+                }
+            }
+            if (!cardData) {
+                cardData = parsed.aadhaar_card_data || parsed;
+            }
 
-            console.log(`✅ [Gemini] Successfully extracted Aadhaar using ${model}`);
+            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
             return {
                 success: true,
                 engine: `Gemini (${model})`,
+                model: model,
+                tokens: tokens,
                 rawJson: JSON.stringify(parsed),
                 aadhaar_card_data: cardData,
+                accuracyFields: accuracyFields,
                 data: {
                     aadharNumber: cardData.aadhaarNumber || "Not Found",
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
-                    nameEnglish: cardData.fullName_English || "Not Found",
-                    nameHindi: cardData.fullName_Hindi || "Not Found",
+                    nameEnglish: cardData.fullName_English || cardData.nameEnglish || "Not Found",
+                    nameHindi: cardData.fullName_Hindi || cardData.nameHindi || "Not Found",
                     dob: cardData.dob || "Not Found",
                     gender: cardData.gender || "Not Found",
                     genderEnglish: cardData.gender || "Not Found",

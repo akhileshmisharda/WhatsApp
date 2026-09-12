@@ -45,7 +45,11 @@ async function ensureAadhaarColumnsExist() {
             { name: 'father_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'husband_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'husband_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
-            { name: 'raw_json', def: 'LONGTEXT DEFAULT NULL' }
+            { name: 'raw_json', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'tokens_prompt', def: 'INT DEFAULT 0' },
+            { name: 'tokens_completion', def: 'INT DEFAULT 0' },
+            { name: 'tokens_total', def: 'INT DEFAULT 0' },
+            { name: 'ai_model', def: 'VARCHAR(100) DEFAULT NULL' }
         ];
 
         for (const col of requiredCols) {
@@ -80,6 +84,10 @@ async function insertOrUpdateAadhaar({
     addressHindi,
     pincode,
     rawJson,
+    tokensPrompt,
+    tokensCompletion,
+    tokensTotal,
+    aiModel,
     senderMobile,
     receiverMobile,
     uploadUri
@@ -108,6 +116,10 @@ async function insertOrUpdateAadhaar({
         address_hindi: sanitizeInput(addressHindi),
         pincode: sanitizeInput(pincode),
         raw_json: typeof rawJson === 'object' ? JSON.stringify(rawJson) : sanitizeInput(rawJson),
+        tokens_prompt: typeof tokensPrompt === 'number' ? tokensPrompt : 0,
+        tokens_completion: typeof tokensCompletion === 'number' ? tokensCompletion : 0,
+        tokens_total: typeof tokensTotal === 'number' ? tokensTotal : 0,
+        ai_model: sanitizeInput(aiModel) || 'gemini-3.1-flash-lite',
         sender_mobile: sanitizeInput(senderMobile) || 'Unknown',
         receiver_mobile: sanitizeInput(receiverMobile) || 'Unknown'
     };
@@ -138,8 +150,9 @@ async function insertOrUpdateAadhaar({
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
                     dob, gender_english, gender_hindi, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
-                    pincode, raw_json, sender_mobile, receiver_mobile, front_image_uri, back_image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pincode, raw_json, tokens_prompt, tokens_completion, tokens_total, ai_model,
+                    sender_mobile, receiver_mobile, front_image_uri, back_image_uri
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
@@ -159,6 +172,10 @@ async function insertOrUpdateAadhaar({
                 payload.address_hindi,
                 payload.pincode,
                 payload.raw_json,
+                payload.tokens_prompt,
+                payload.tokens_completion,
+                payload.tokens_total,
+                payload.ai_model,
                 payload.sender_mobile,
                 payload.receiver_mobile,
                 frontUri,
@@ -183,6 +200,7 @@ async function insertOrUpdateAadhaar({
                 'dob', 'gender_english', 'gender_hindi', 'father_name_english',
                 'father_name_hindi', 'husband_name_english', 'husband_name_hindi',
                 'address_english', 'address_hindi', 'pincode', 'raw_json',
+                'tokens_prompt', 'tokens_completion', 'tokens_total', 'ai_model',
                 'sender_mobile', 'receiver_mobile'
             ];
 

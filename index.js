@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.5.0-STRUCTURED-AADHAAR-SCHEMA";
+const APP_VERSION = "v4.6.0-ENTERPRISE-OCR-PROMPT";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -445,6 +445,8 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             uploadUri: uploadUri
         });
 
+        const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
+
         // 3. Upsert into wh_aadhar_records
         if (details.aadharNumber && details.aadharNumber !== "Not Found") {
             await insertOrUpdateAadhaar({
@@ -464,6 +466,10 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
                 addressHindi: details.addressHindi,
                 pincode: details.pincode,
                 rawJson: geminiResult.rawJson || geminiResult.aadhaar_card_data,
+                tokensPrompt: tokens.promptTokens,
+                tokensCompletion: tokens.candidatesTokens,
+                tokensTotal: tokens.totalTokens,
+                aiModel: geminiResult.model || geminiResult.engine,
                 senderMobile: senderMobile,
                 receiverMobile: currentBotNumber,
                 uploadUri: uploadUri
@@ -494,6 +500,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             `🔢 *Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
             `🏠 *Address:* ${displayVal(details.addressEnglish)}\n` +
             `📮 *PIN Code:* ${displayVal(details.pincode)}\n\n` +
+            `📊 *Tokens Consumed:* ${tokens.totalTokens} (Prompt: ${tokens.promptTokens} | Output: ${tokens.candidatesTokens})\n\n` +
             `⚡ _Powered by FabKraft - AI_`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
