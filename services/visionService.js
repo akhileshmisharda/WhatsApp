@@ -1,10 +1,21 @@
-﻿const vision = require('@google-cloud/vision');
+const vision = require('@google-cloud/vision');
 const path = require('path');
+const fs = require('fs');
 
-// Initialize Google Vision Client
-const client = new vision.ImageAnnotatorClient({
-    keyFilename: path.join(__dirname, '../google-key.json')
-});
+// Initialize Google Vision Client (Fallback to Application Default Credentials on Cloud Run)
+const keyFilePath = path.join(__dirname, '../google-key.json');
+const clientOptions = fs.existsSync(keyFilePath) ? { keyFilename: keyFilePath } : {};
+const client = new vision.ImageAnnotatorClient(clientOptions);
+
+/**
+ * Header strings to ignore when extracting names and details
+ */
+const IGNORED_NAME_KEYWORDS = [
+    "GOVERNMENT", "INDIA", "BHARAT", "SARKAR", "AUTHORITY", "IDENTIFICATION",
+    "UNIQUE", "UIDAI", "ENROLMENT", "HELP", "WWW", "FATHER", "HUSBAND",
+    "DOB", "DATE OF BIRTH", "YEAR OF BIRTH", "MALE", "FEMALE", "TRANSGENDER",
+    "ADDRESS", "MERI PEHCHAN", "MERA AADHAAR", "DOWNLOAD", "ISSUE DATE"
+];
 
 /**
  * Extracts text from an image buffer using Google Vision API and parses key Aadhaar fields
@@ -26,7 +37,8 @@ async function extractAadhaarDetails(imageBuffer) {
                 aadharNumber: "Not Found",
                 vidNumber: "Not Found",
                 addressEnglish: "Not Found",
-                addressHindi: "Not Found"
+                addressHindi: "Not Found",
+                pincode: "Not Found"
             };
         }
 
@@ -45,7 +57,8 @@ async function extractAadhaarDetails(imageBuffer) {
         // ===============================
         // 1. EXTRACT HINDI & ENGLISH NAME
         // ===============================
-        const toIndex = lines.findIndex(l => /^To$/i.test(l));
+        // Case A: Letter format with "To" block
+        const toIndex = lines.findIndex(l => /^To$/i.test(l) || /^प्रति$/i.test(l));
 
         if (toIndex !== -1 && toIndex + 2 < lines.length) {
             const possibleHindi = lines[toIndex + 1];
@@ -54,12 +67,35 @@ async function extractAadhaarDetails(imageBuffer) {
             if (/[\u0900-\u097F]/.test(possibleHindi)) {
                 nameHindi = possibleHindi;
             }
-
             if (/^[A-Za-z\s.'-]+$/.test(possibleEnglish)) {
                 nameEnglish = possibleEnglish;
             }
         }
 
+        // Case B: Standard Aadhaar card format (Name line directly above DOB)
+        if (nameEnglish === "Not Found") {
+            const dobIndex = lines.findIndex(l => 
+                /DOB|Date of Birth|जन्म तिथि|जन्मतिथि|Year of Birth|जन्म वर्ष/i.test(l)
+            );
+
+            if (dobIndex > 0) {
+                // Check up to 3 lines above DOB for English and Hindi names
+                for (let i = dobIndex - 1; i >= Math.max(0, dobIndex - 3); i--) {
+                    const line = lines[i];
+                    const isIgnored = IGNORED_NAME_KEYWORDS.some(k => line.toUpperCase().includes(k));
+                    
+                    if (!isIgnored) {
+                        if (nameEnglish === "Not Found" && /^[A-Za-z\s.'-]+$/.test(line) && line.length >= 3) {
+                            nameEnglish = line;
+                        } else if (nameHindi === "Not Found" && /[\u0900-\u097F]/.test(line) && line.length >= 3) {
+                            nameHindi = line;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Case C: Regex fallback for English Name before Relationship / DOB
         if (nameEnglish === "Not Found") {
             const engMatch = text.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)\n+(?:S\/O|C\/O|D\/O|W\/O):/i) ||
                              text.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)\n+(?:जन्म तिथि|DOB|Date of Birth)/i);
@@ -68,21 +104,15 @@ async function extractAadhaarDetails(imageBuffer) {
             }
         }
 
-        if (nameHindi === "Not Found" && nameEnglish !== "Not Found") {
-            const engIndex = lines.findIndex(l => l.includes(nameEnglish));
-            if (engIndex > 0 && /[\u0900-\u097F]/.test(lines[engIndex - 1])) {
-                nameHindi = lines[engIndex - 1];
-            }
-        }
-
         // ===============================
         // 2. EXTRACT DOB / YOB
         // ===============================
         let dob = "Not Found";
         const dobMatch = text.match(/(?:DOB|Date of Birth|जन्म तिथि|जन्मतिथि)[^\d]*(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i) ||
+                         text.match(/\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b/) ||
                          text.match(/(?:Year of Birth|YOB|जन्म वर्ष)[^\d]*(\d{4})/i);
         if (dobMatch) {
-            dob = dobMatch[1].trim();
+            dob = dobMatch[1].trim().replace(/-/g, '/');
         }
 
         // ===============================
@@ -122,10 +152,16 @@ async function extractAadhaarDetails(imageBuffer) {
         const aadharNumber = extract12DigitAadhaar(text);
 
         // ===============================
-        // 6. EXTRACT ADDRESS
+        // 6. EXTRACT ADDRESS & PINCODE
         // ===============================
         let addressEnglish = "Not Found";
         let addressHindi = "Not Found";
+        let pincode = "Not Found";
+
+        const pinMatch = text.match(/\b([1-9][0-9]{5})\b/);
+        if (pinMatch) {
+            pincode = pinMatch[1];
+        }
 
         const engAddressMatch = text.match(/Address:\s*([\s\S]*?\d{6})/i) ||
                                 text.match(/(?:S\/O|C\/O|D\/O|W\/O):?\s*([\s\S]*?\d{6})/i);
@@ -154,7 +190,8 @@ async function extractAadhaarDetails(imageBuffer) {
             aadharNumber,
             vidNumber,
             addressEnglish,
-            addressHindi
+            addressHindi,
+            pincode
         };
 
     } catch (error) {

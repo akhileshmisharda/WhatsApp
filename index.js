@@ -146,6 +146,19 @@ async function startBot() {
             const senderJid = msg.key.remoteJid;
             const senderMobile = senderJid ? senderJid.split('@')[0].replace(/[^0-9]/g, "") : "Unknown";
 
+            // Ignore status broadcasts
+            if (senderJid === 'status@broadcast') return;
+
+            console.log(`📩 Incoming from ${senderMobile}: "${rawCaption}" | IsImage: ${isDirectImage || isQuotedImage}`);
+
+            // 1. Menu / Greeting trigger
+            const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
+            if (isGreetingOrMenu && !isDirectImage && !isQuotedImage) {
+                await sendMenuResponse(sock, senderJid, msg);
+                return;
+            }
+
+            // 2. Document Tag Detection
             const isAadhaarTag = captionText.includes("aadhar") || captionText.includes("adhar");
             const isPanTag = captionText.includes("pan");
 
@@ -168,11 +181,42 @@ async function startBot() {
                 await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
             } else if ((isDirectImage || isQuotedImage) && isPanTag) {
                 await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
+            } else if (isDirectImage && !isAadhaarTag && !isPanTag) {
+                // Sent image without caption
+                await sock.sendMessage(senderJid, {
+                    text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
+                }, { quoted: msg });
+            } else if (!isDirectImage && !isQuotedImage && captionText.length > 0) {
+                // Any other text
+                await sendMenuResponse(sock, senderJid, msg);
             }
         } catch (err) {
             console.error("❌ Message Upsert Error:", err.message);
         }
     });
+}
+
+/**
+ * Sends a helpful menu guide to the user
+ */
+async function sendMenuResponse(sock, replyJid, quotedMsg) {
+    const menuText = 
+        `👋 *Welcome to Fabkraft Document Assistant!*\n\n` +
+        `Here is how you can process your documents automatically:\n\n` +
+        `🪪 *1. Aadhaar Card Processing:*\n` +
+        `• Send an image of your Aadhaar Card with the caption *\`aadhar\`* or *\`adhar\`*.\n` +
+        `• Or reply to any sent Aadhaar photo with *\`aadhar\`*.\n` +
+        `• *Extracted:* Name (English & Hindi), DOB, Gender, Aadhaar Number, VID, Address & PIN code.\n\n` +
+        `💳 *2. PAN Card Processing:*\n` +
+        `• Send an image of your PAN Card with the caption *\`pan\`*.\n` +
+        `• Or reply to any sent PAN photo with *\`pan\`*.\n` +
+        `• *Extracted:* Name, Father's Name, DOB, PAN Number.\n\n` +
+        `🌐 *Uploads & Storage:*\n` +
+        `• All images are automatically stored at: \`fabkraft.in/WhatsAppFolder/uploads/\`\n` +
+        `• All data records are saved in MySQL database with \`wh_\` tables.\n\n` +
+        `_Send your image now to get started!_`;
+
+    await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
 
 /**
@@ -182,7 +226,7 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
     console.log(`🪪 Aadhaar detected from ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: "⏳ *Aadhaar image detected! Processing and uploading to Fabkraft...*"
+        text: "⏳ *Aadhaar image detected! Processing OCR and uploading to Fabkraft...*"
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -198,7 +242,7 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
 
         if (extracted.aadharNumber === "Not Found") {
             await sock.sendMessage(replyJid, {
-                text: "⚠️ *Aadhaar Number could not be detected.* Please send a clearer image."
+                text: "⚠️ *Aadhaar Number could not be detected.* Please send a clearer, un-cropped image."
             }, { quoted: quotedRef || imageMsgObj });
             return;
         }
@@ -208,7 +252,7 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
 
         // 2. Upload directly to fabkraft.in/WhatsAppFolder/uploads/aadhar/
         const uploadResult = await uploadToFabkraft(buffer, fileName, 'aadhar');
-        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `LOCAL_ONLY_${fileName}`;
+        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/aadhar/${fileName}`;
 
         // 3. Insert into wh_uploads
         const uploadId = await logImageUpload({
@@ -240,7 +284,7 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Available";
 
         const replyText = 
-            `🪪 *AADHAAR PROCESSED & UPLOADED*\n\n` +
+            `🪪 *AADHAAR PROCESSED & SAVED*\n\n` +
             `📦 *Database Status:* ${dbResult.action.toUpperCase()}\n` +
             `📱 *QR Bot Account:* ${currentBotNumber}\n` +
             `📲 *Sent By:* ${senderMobile}\n\n` +
@@ -250,7 +294,8 @@ async function handleAadhaarFlow(sock, imageMsgObj, replyJid, senderMobile, user
             `🚻 *Gender:* ${displayVal(extracted.genderEnglish)}\n` +
             `🔢 *Aadhaar Number:* ${displayVal(extracted.aadharNumber)}\n` +
             `🔢 *Virtual ID (VID):* ${displayVal(extracted.vidNumber)}\n` +
-            `🏠 *Address:* ${displayVal(extracted.addressEnglish)}\n\n` +
+            `🏠 *Address:* ${displayVal(extracted.addressEnglish)}\n` +
+            `📮 *PIN Code:* ${displayVal(extracted.pincode)}\n\n` +
             `🌐 *Uploaded File URI:*\n${uploadUri}`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
@@ -271,7 +316,7 @@ async function handlePanFlow(sock, imageMsgObj, replyJid, senderMobile, userCapt
     console.log(`💳 PAN Card detected from ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: "⏳ *PAN Card image detected! Processing and uploading to Fabkraft...*"
+        text: "⏳ *PAN Card image detected! Processing OCR and uploading to Fabkraft...*"
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -297,7 +342,7 @@ async function handlePanFlow(sock, imageMsgObj, replyJid, senderMobile, userCapt
 
         // 2. Upload directly to fabkraft.in/WhatsAppFolder/uploads/pan/
         const uploadResult = await uploadToFabkraft(buffer, fileName, 'pan');
-        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `LOCAL_ONLY_${fileName}`;
+        const uploadUri = uploadResult.success ? uploadResult.uploadUri : `https://fabkraft.in/WhatsAppFolder/uploads/pan/${fileName}`;
 
         // 3. Insert into wh_uploads
         const uploadId = await logImageUpload({
@@ -323,7 +368,7 @@ async function handlePanFlow(sock, imageMsgObj, replyJid, senderMobile, userCapt
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Available";
 
         const replyText = 
-            `💳 *PAN CARD PROCESSED & UPLOADED*\n\n` +
+            `💳 *PAN CARD PROCESSED & SAVED*\n\n` +
             `📦 *Database Status:* ${dbResult.action.toUpperCase()}\n` +
             `📱 *QR Bot Account:* ${currentBotNumber}\n` +
             `📲 *Sent By:* ${senderMobile}\n\n` +
