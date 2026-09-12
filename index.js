@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.2.0-GEMINI-3.1-FLASH-LITE";
+const APP_VERSION = "v4.3.0-DYNAMIC-KEY-FABKRAFT";
 
 let sock = null;
 let currentBotNumber = "Unknown";

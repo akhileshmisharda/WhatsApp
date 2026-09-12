@@ -1,8 +1,51 @@
 const axios = require('axios');
+const https = require('https');
 const { extractAadhaarDetails: extractAadhaarVision } = require('./visionService');
 const { extractPanDetails: extractPanVision } = require('./panvisionService');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6LN2HSUHjVSqjwTH-wFSKetRUpJlDn2_okpkDJ0-ZjMKg';
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false
+});
+
+let cachedGeminiKey = process.env.GEMINI_API_KEY || null;
+let lastKeyFetchTime = 0;
+
+/**
+ * Dynamically fetches the Gemini API key from https://fabkraft.in/get_gemini_key.php
+ * Caches in memory for 5 minutes.
+ */
+async function getGeminiApiKey() {
+    const now = Date.now();
+    if (cachedGeminiKey && (now - lastKeyFetchTime < 300000)) {
+        return cachedGeminiKey;
+    }
+
+    try {
+        console.log('🔑 [GeminiKey] Fetching API key from https://fabkraft.in/get_gemini_key.php...');
+        const res = await axios.get('https://fabkraft.in/get_gemini_key.php', {
+            httpsAgent,
+            timeout: 10000
+        });
+
+        let key = null;
+        if (typeof res.data === 'string') {
+            key = res.data.trim();
+        } else if (typeof res.data === 'object' && res.data !== null) {
+            key = res.data.key || res.data.api_key || res.data.gemini_key || res.data.apiKey || Object.values(res.data)[0];
+        }
+
+        if (key && typeof key === 'string' && key.trim().length > 5) {
+            cachedGeminiKey = key.trim();
+            lastKeyFetchTime = now;
+            console.log(`✅ [GeminiKey] Successfully loaded dynamic key (Prefix: ${cachedGeminiKey.substring(0, 8)}...)`);
+            return cachedGeminiKey;
+        }
+    } catch (err) {
+        console.warn(`⚠️ [GeminiKey] Failed to fetch key from fabkraft.in:`, err.message);
+    }
+
+    return cachedGeminiKey || process.env.GEMINI_API_KEY || '';
+}
 
 // Prioritize Gemini 3.1 Flash-Lite & latest Flash-Lite vision models
 const MODELS = [
@@ -21,6 +64,7 @@ const MODELS = [
  * @returns {Promise<Object>}
  */
 async function extractAadhaarWithGemini(buffer) {
+    const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
     const prompt = `
 Analyze this Indian Aadhaar Card image and extract the following details into valid JSON format.
@@ -66,11 +110,11 @@ Output ONLY raw valid JSON without markdown formatting.
     // 1. Try Gemini 3.1 Flash-Lite & latest models
     for (const model of MODELS) {
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
                 headers: { 
                     'Content-Type': 'application/json',
-                    'x-goog-api-key': GEMINI_API_KEY
+                    'x-goog-api-key': apiKey
                 },
                 timeout: 15000
             });
@@ -130,6 +174,7 @@ Output ONLY raw valid JSON without markdown formatting.
  * @returns {Promise<Object>}
  */
 async function extractPanWithGemini(buffer) {
+    const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
     const prompt = `
 Analyze this Indian PAN Card image and extract the following details into valid JSON format.
@@ -169,11 +214,11 @@ Output ONLY raw valid JSON without markdown formatting.
     // 1. Try Gemini 3.1 Flash-Lite & latest models
     for (const model of MODELS) {
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
                 headers: { 
                     'Content-Type': 'application/json',
-                    'x-goog-api-key': GEMINI_API_KEY
+                    'x-goog-api-key': apiKey
                 },
                 timeout: 15000
             });
