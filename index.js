@@ -27,14 +27,13 @@ const {
 } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
-// 1. STATE, SOCKET REF & IN-MEMORY EVENT LOGS
+// 1. STATE & EVENT LOGS
 // ---------------------------------------------------------
 let sock = null;
 let currentBotNumber = "Unknown";
 let connectionStatus = "initializing";
 let lastConnectedAt = null;
 let lastQrGeneratedAt = null;
-let qrString = null;
 const eventLogs = [];
 
 function logEvent(type, message, data = null) {
@@ -50,14 +49,13 @@ function logEvent(type, message, data = null) {
 }
 
 // ---------------------------------------------------------
-// 2. EXPRESS HTTP SERVER WITH LIVE DIAGNOSTIC ENDPOINTS
+// 2. EXPRESS HTTP SERVER (Cloud Run Entry & Diagnostics)
 // ---------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
 
-// Main Status Endpoint
 app.get('/', (req, res) => {
     res.json({
         service: 'Fabkraft WhatsApp ERP Document Parser',
@@ -67,15 +65,10 @@ app.get('/', (req, res) => {
         is_socket_ready: !!sock?.user,
         last_connected: lastConnectedAt,
         last_qr_generated: lastQrGeneratedAt,
-        timestamp: new Date().toISOString(),
-        diagnostic_urls: {
-            view_live_logs: '/logs',
-            test_send_message: '/send-test?to=9079377715&text=Hello'
-        }
+        timestamp: new Date().toISOString()
     });
 });
 
-// Live Event Logs Endpoint (Viewable directly in your browser)
 app.get('/logs', (req, res) => {
     res.json({
         whatsapp_status: connectionStatus,
@@ -85,25 +78,25 @@ app.get('/logs', (req, res) => {
     });
 });
 
-// Test Send Endpoint: Sends a test message and returns exact outcome
 app.get('/send-test', async (req, res) => {
-    const targetMobile = req.query.to ? req.query.to.replace(/[^0-9]/g, "") : "9079377715";
+    let targetMobile = req.query.to ? req.query.to.replace(/[^0-9]/g, "") : "919079377715";
+    if (targetMobile.length === 10) targetMobile = `91${targetMobile}`;
     const text = req.query.text || "Hello from Fabkraft Cloud Run Bot!";
 
-    if (!sock) {
-        return res.status(500).json({
+    if (!sock || connectionStatus !== "connected") {
+        return res.status(503).json({
             success: false,
-            error: "WhatsApp socket is not initialized yet.",
+            error: "WhatsApp socket is currently not connected (Status: " + connectionStatus + ").",
             status: connectionStatus
         });
     }
 
     try {
         const jid = `${targetMobile}@s.whatsapp.net`;
-        logEvent("OUTGOING_TEST", `Attempting test send to ${jid}`, { text });
+        logEvent("OUTGOING_TEST", `Sending test message to ${jid}`, { text });
 
         const result = await sock.sendMessage(jid, { text: `🤖 *Test Message:*\n${text}` });
-        logEvent("OUTGOING_SUCCESS", `Test message sent successfully to ${jid}`);
+        logEvent("OUTGOING_SUCCESS", `Test message delivered to ${jid}`);
 
         res.json({
             success: true,
@@ -112,7 +105,7 @@ app.get('/send-test', async (req, res) => {
             status: connectionStatus
         });
     } catch (err) {
-        logEvent("OUTGOING_ERROR", `Failed to send test message to ${targetMobile}: ${err.message}`);
+        logEvent("OUTGOING_ERROR", `Failed to send to ${targetMobile}: ${err.message}`);
         res.status(500).json({
             success: false,
             error: err.message,
@@ -128,10 +121,52 @@ app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------
-// 3. WHATSAPP BOT ENGINE
+// 3. EXTRACT TEXT & MEDIA HELPER
+// ---------------------------------------------------------
+function getMessageDetails(msg) {
+    if (!msg?.message) return { text: "", isImage: false, imageMessage: null };
+
+    let content = msg.message;
+    while (
+        content?.ephemeralMessage?.message ||
+        content?.viewOnceMessage?.message ||
+        content?.viewOnceMessageV2?.message ||
+        content?.documentWithCaptionMessage?.message
+    ) {
+        content = 
+            content.ephemeralMessage?.message ||
+            content.viewOnceMessage?.message ||
+            content.viewOnceMessageV2?.message ||
+            content.documentWithCaptionMessage?.message;
+    }
+
+    const text = 
+        content?.conversation ||
+        content?.extendedTextMessage?.text ||
+        content?.imageMessage?.caption ||
+        content?.documentMessage?.caption ||
+        content?.videoMessage?.caption ||
+        "";
+
+    const isImage = !!content?.imageMessage;
+    const quotedMsg = content?.extendedTextMessage?.contextInfo?.quotedMessage;
+    const isQuotedImage = !!quotedMsg?.imageMessage;
+
+    return {
+        text: text.trim(),
+        isImage: isImage || isQuotedImage,
+        imageMessage: content?.imageMessage || quotedMsg?.imageMessage || null,
+        isQuotedImage,
+        quotedMsg,
+        contextInfo: content?.extendedTextMessage?.contextInfo
+    };
+}
+
+// ---------------------------------------------------------
+// 4. WHATSAPP BOT ENGINE
 // ---------------------------------------------------------
 async function startBot() {
-    logEvent("WHATSAPP_INIT", "Initializing WhatsApp Socket with MySQL Auth State...");
+    logEvent("WHATSAPP_INIT", "Starting WhatsApp Socket with MySQL Auth State...");
     connectionStatus = "connecting";
 
     let authState, saveCreds;
@@ -139,14 +174,14 @@ async function startBot() {
         const mySqlAuth = await useMySQLAuthState();
         authState = mySqlAuth.state;
         saveCreds = mySqlAuth.saveCreds;
-        logEvent("AUTH_SOURCE", "Using MySQL-backed session storage (wh_baileys_auth)");
+        logEvent("AUTH_SOURCE", "Using MySQL session (wh_baileys_auth)");
 
         if (authState?.creds?.me?.id) {
             currentBotNumber = authState.creds.me.id.split(':')[0].replace(/[^0-9]/g, "");
-            logEvent("AUTH_CREDS", `Loaded existing credentials for: ${currentBotNumber}`);
+            logEvent("AUTH_CREDS", `Credentials loaded for: ${currentBotNumber}`);
         }
     } catch (authErr) {
-        logEvent("AUTH_ERROR", `MySQL Auth failed, falling back to local: ${authErr.message}`);
+        logEvent("AUTH_ERROR", `MySQL Auth failed, fallback to local: ${authErr.message}`);
         const fileAuth = await useMultiFileAuthState("./auth");
         authState = fileAuth.state;
         saveCreds = fileAuth.saveCreds;
@@ -161,6 +196,9 @@ async function startBot() {
         auth: authState,
         printQRInTerminal: true,
         logger: logger,
+        keepAliveIntervalMs: 25000,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
         browser: ["Fabkraft Cloud Parser", "Chrome", "1.0"]
     });
 
@@ -176,9 +214,8 @@ async function startBot() {
     sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
         if (qr) {
             connectionStatus = "waiting_for_qr_scan";
-            qrString = qr;
             lastQrGeneratedAt = new Date().toISOString();
-            logEvent("QR_GENERATED", "QR code generated, waiting for scan");
+            logEvent("QR_GENERATED", "QR code waiting for scan");
             qrcode.generate(qr, { small: true });
         }
 
@@ -186,7 +223,7 @@ async function startBot() {
             connectionStatus = "connected";
             lastConnectedAt = new Date().toISOString();
             currentBotNumber = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, "") : currentBotNumber;
-            logEvent("CONNECTED", `WhatsApp Connected Successfully! Bot number: ${currentBotNumber}`);
+            logEvent("CONNECTED", `WhatsApp Connected Successfully! Bot: ${currentBotNumber}`);
         }
 
         if (connection === "close") {
@@ -200,7 +237,7 @@ async function startBot() {
             if (shouldReconnect) {
                 setTimeout(startBot, 3000);
             } else {
-                logEvent("LOGGED_OUT", "Logged out. Resetting session.");
+                logEvent("LOGGED_OUT", "Logged out. Please scan QR code again.");
             }
         }
     });
@@ -210,43 +247,18 @@ async function startBot() {
             for (const msg of messages) {
                 if (!msg.message) continue;
 
-                // Unwrap nested messages
-                let messageContent = msg.message;
-                while (
-                    messageContent?.ephemeralMessage?.message ||
-                    messageContent?.viewOnceMessage?.message ||
-                    messageContent?.viewOnceMessageV2?.message ||
-                    messageContent?.documentWithCaptionMessage?.message
-                ) {
-                    messageContent = 
-                        messageContent.ephemeralMessage?.message ||
-                        messageContent.viewOnceMessage?.message ||
-                        messageContent.viewOnceMessageV2?.message ||
-                        messageContent.documentWithCaptionMessage?.message;
-                }
-
-                const quotedMsg = messageContent?.extendedTextMessage?.contextInfo?.quotedMessage;
-                const isQuotedImage = !!quotedMsg?.imageMessage;
-                const isDirectImage = !!messageContent?.imageMessage;
-
-                const rawCaption = 
-                    messageContent?.imageMessage?.caption ||
-                    messageContent?.conversation ||
-                    messageContent?.extendedTextMessage?.text ||
-                    "";
-
-                const captionText = rawCaption.trim().toLowerCase();
                 const senderJid = msg.key.remoteJid;
-                
                 if (!senderJid || senderJid === 'status@broadcast') continue;
 
+                const { text, isImage, isQuotedImage, quotedMsg, contextInfo } = getMessageDetails(msg);
+                const captionText = text.toLowerCase();
                 const senderMobile = senderJid.split('@')[0].replace(/[^0-9]/g, "");
 
-                logEvent("MESSAGE_IN", `From: ${senderMobile} | Text: "${rawCaption}" | Image: ${isDirectImage || isQuotedImage}`);
+                logEvent("MESSAGE_IN", `From: ${senderMobile} | Text: "${text}" | Image: ${isImage}`);
 
                 // 1. Menu / Greeting trigger
                 const isGreetingOrMenu = /^(hi|hello|hey|menu|help|start|options|info)\b/i.test(captionText);
-                if (isGreetingOrMenu && !isDirectImage && !isQuotedImage) {
+                if (isGreetingOrMenu && !isImage) {
                     logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg);
                     continue;
@@ -264,22 +276,22 @@ async function startBot() {
                         message: quotedMsg,
                         key: {
                             remoteJid: senderJid,
-                            id: messageContent.extendedTextMessage.contextInfo.stanzaId,
-                            participant: messageContent.extendedTextMessage.contextInfo.participant
+                            id: contextInfo?.stanzaId,
+                            participant: contextInfo?.participant
                         }
                     };
                     quotedRef = msg;
                 }
 
-                if ((isDirectImage || isQuotedImage) && isAadhaarTag) {
-                    await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
-                } else if ((isDirectImage || isQuotedImage) && isPanTag) {
-                    await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, rawCaption, quotedRef);
-                } else if (isDirectImage && !isAadhaarTag && !isPanTag) {
+                if (isImage && isAadhaarTag) {
+                    await handleAadhaarFlow(sock, targetMsgObj, senderJid, senderMobile, text, quotedRef);
+                } else if (isImage && isPanTag) {
+                    await handlePanFlow(sock, targetMsgObj, senderJid, senderMobile, text, quotedRef);
+                } else if (isImage && !isAadhaarTag && !isPanTag) {
                     await sock.sendMessage(senderJid, {
                         text: "📸 *Image received!*\n\nPlease reply to this image with:\n• *`aadhar`* - To process as Aadhaar Card\n• *`pan`* - To process as PAN Card"
                     }, { quoted: msg });
-                } else if (!isDirectImage && !isQuotedImage && captionText.length > 0) {
+                } else if (!isImage && captionText.length > 0) {
                     await sendMenuResponse(sock, senderJid, msg);
                 }
             }
