@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.2-A-COMMAND-RELATION-FIX";
+const APP_VERSION = "v4.9.3-STRICT-AADHAAR-MATCH";
 
 let sock = null;
 let currentBotNumber = "Unknown";

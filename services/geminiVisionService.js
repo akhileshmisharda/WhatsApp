@@ -122,8 +122,8 @@ Strict Rules:
    - On the BACK side, Aadhaar numbers are NOT printed (only helpline numbers like 1947, 1800-xxx or barcodes exist). NEVER extract toll-free numbers, PIN codes, or barcode digits as Aadhaar number. On the back side, ALWAYS set 'aadhaarNumber': "".
 5. FATHER VS HUSBAND NAME & RELATION STATUS:
    - Identify relation_status as one of: "W/O" (Wife of / पत्नी), "S/O" (Son of / आत्मज / पुत्र), "D/O" (Daughter of / सुपुत्री), "C/O" (Care of / संरक्षक).
-   - If relation is W/O / पत्नी / भार्या: Extract the husband's name into BOTH husbandName_English AND husbandName_Hindi (transliterate if only one language is printed). Leave fatherName fields empty ("").
-   - If relation is S/O, D/O, C/O, आत्मज, सुपुत्र, पुत्र, सुपुत्री, पिता: Extract the father/guardian's name into BOTH fatherName_English AND fatherName_Hindi (transliterate if only one language is printed). Leave husbandName fields empty ("").
+   - MANDATORY BILINGUAL TRANSLITERATION: You MUST provide BOTH husbandName_English AND husbandName_Hindi if a husband is found (transliterate phonetically into Devanagari script if Hindi is not explicitly printed, e.g., 'Brij Mohan' -> 'बृजमोहन', 'Akhilesh' -> 'अखिलेश'). Leave fatherName fields empty ("").
+   - If relation is father/guardian (S/O, D/O, C/O, आत्मज, सुपुत्र): You MUST provide BOTH fatherName_English AND fatherName_Hindi (transliterate phonetically if only one language is printed). Leave husbandName fields empty ("").
 6. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling or names.
 7. ZERO FABRICATION: If a field is missing or unreadable, set it to empty string "". Never guess digits or dates.
 8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only.
@@ -148,7 +148,7 @@ Strict Rules:
             "fatherName_English": "Father/Care-of Name in English if listed after S/O, D/O, C/O, आत्मज, सुपुत्र, पुत्र. Leave empty if W/O/पत्नी.",
             "fatherName_Hindi": "Father/Care-of Name in Hindi (Devanagari) if listed after आत्मज, सुपुत्र, पुत्र, S/O, D/O, C/O. Leave empty if W/O/पत्नी.",
             "husbandName_English": "Husband Name in English if listed after W/O (Wife of) or पत्नी. Leave empty if S/O/D/O/C/O/आत्मज.",
-            "husbandName_Hindi": "Husband Name in Hindi (Devanagari) if listed after पत्नी or W/O. Leave empty if S/O/D/O/C/O/आत्मज.",
+            "husbandName_Hindi": "Husband Name in Hindi (Devanagari - transliterate if needed) if listed after पत्नी or W/O. Leave empty if S/O/D/O/C/O/आत्मज.",
             "fullAddress_English": "Complete address in English or empty string",
             "fullAddress_Hindi": "Complete address in Hindi (Devanagari script) or empty string",
             "pincode": "6-digit PIN code or empty string",
@@ -269,6 +269,19 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 else detectedSide = "both";
             }
 
+            // Strictly filter out back-side fake Aadhaar numbers
+            if (detectedSide === "back" || (cardData.aadhaarNumber && (cardData.aadhaarNumber.includes("1947") || cardData.aadhaarNumber.includes("1800")))) {
+                cardData.aadhaarNumber = "";
+            }
+
+            let cleanCardAadhaar = "Not Found";
+            if (detectedSide !== "back" && cardData.aadhaarNumber) {
+                const rawDigits = String(cardData.aadhaarNumber).replace(/\D/g, '');
+                if (rawDigits.length === 12 && !rawDigits.startsWith("1947") && !rawDigits.startsWith("1800")) {
+                    cleanCardAadhaar = `${rawDigits.slice(0, 4)} ${rawDigits.slice(4, 8)} ${rawDigits.slice(8, 12)}`;
+                }
+            }
+
             console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Side: ${detectedSide}, Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
             return {
                 success: true,
@@ -287,7 +300,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     pincode: cardData.pincode_accuracy || 100
                 },
                 data: {
-                    aadharNumber: (detectedSide !== "back" && cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.includes("1947") && !cardData.aadhaarNumber.includes("1800")) ? cardData.aadhaarNumber : "Not Found",
+                    aadharNumber: cleanCardAadhaar,
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
                     nameEnglish: cardData.fullName_English || "Not Found",
                     nameHindi: cardData.fullName_Hindi || "Not Found",

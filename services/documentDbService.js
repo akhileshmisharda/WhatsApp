@@ -120,7 +120,14 @@ async function insertOrUpdateAadhaar({
 }) {
     await ensureAadhaarColumnsExist();
 
-    let cleanAadhaar = sanitizeInput(aadharNumber);
+    let cleanAadhaar = null;
+    if (aadharNumber && aadharNumber !== "Not Found") {
+        const digits = String(aadharNumber).replace(/\D/g, '');
+        if (digits.length === 12 && !digits.startsWith("1947") && !digits.startsWith("1800")) {
+            cleanAadhaar = `${digits.slice(0, 4)} ${digits.slice(4, 8)} ${digits.slice(8, 12)}`;
+        }
+    }
+
     const cleanSender = sanitizeInput(senderMobile) || 'Unknown';
     const cleanReceiver = sanitizeInput(receiverMobile) || 'Unknown';
 
@@ -133,11 +140,6 @@ async function insertOrUpdateAadhaar({
         if (hasFrontInfo && !hasBackInfo) isFrontScan = true;
         else if (hasBackInfo && !hasFrontInfo) isBackScan = true;
         else { isFrontScan = true; isBackScan = true; }
-    }
-
-    // STRICT SANITIZATION: Never accept back-side barcode/1947/1800 numbers as Aadhaar
-    if (isBackScan || (cleanAadhaar && (cleanAadhaar.includes('1947') || cleanAadhaar.includes('1800') || cleanAadhaar.replace(/\s/g, '').length !== 12))) {
-        cleanAadhaar = null;
     }
 
     let resolvedRelation = sanitizeInput(relationStatus);
@@ -184,29 +186,13 @@ async function insertOrUpdateAadhaar({
     try {
         let existing = null;
 
-        // 1. Primary Lookup: Exact Aadhaar Number (if valid 12-digit)
-        if (payload.aadhar_number && payload.aadhar_number !== "Not Found" && payload.aadhar_number.replace(/\s/g, '').length === 12) {
+        // Strict Matching: ONLY match and merge if exact Aadhaar Number matches an existing record in DB
+        if (payload.aadhar_number) {
             const [rows] = await pool.execute(
                 'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
             );
             if (rows.length > 0) existing = rows[0];
-        }
-
-        // 2. Secondary Lookup: Same Sender within last 30 minutes where Front or Back is missing
-        if (!existing && cleanSender !== 'Unknown') {
-            const [recentRows] = await pool.execute(
-                `SELECT * FROM wh_aadhar_records 
-                 WHERE sender_mobile = ? 
-                   AND created_at >= (NOW() - INTERVAL 30 MINUTE)
-                   AND (front_image_uri IS NULL OR back_image_uri IS NULL)
-                 ORDER BY created_at DESC LIMIT 1`,
-                [cleanSender]
-            );
-            if (recentRows.length > 0) {
-                existing = recentRows[0];
-                console.log(`🔗 [Aadhaar Merge] Matched existing session record ID #${existing.id} for sender ${cleanSender}`);
-            }
         }
 
         // Case A: New Record -> INSERT
