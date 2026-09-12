@@ -191,7 +191,7 @@ async function insertOrUpdateAadhaar({
     try {
         let existing = null;
 
-        // Strict Matching: ONLY match and merge if exact Aadhaar Number matches an existing record in DB
+        // 1. Primary Lookup: Exact Aadhaar Number (if valid 12-digit)
         if (payload.aadhar_number) {
             const [rows] = await pool.execute(
                 'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
@@ -200,11 +200,30 @@ async function insertOrUpdateAadhaar({
             if (rows.length > 0) existing = rows[0];
         }
 
-        // Case A: New Record -> INSERT
+        // 2. Secondary Lookup for Back Scans: Match open record with missing back_image_uri from same sender
+        if (!existing && isBackScan && cleanSender !== 'Unknown') {
+            const [recentRows] = await pool.execute(
+                `SELECT * FROM wh_aadhar_records 
+                 WHERE sender_mobile = ? 
+                   AND created_at >= (NOW() - INTERVAL 30 MINUTE)
+                   AND front_image_uri IS NOT NULL 
+                   AND back_image_uri IS NULL
+                 ORDER BY created_at DESC LIMIT 1`,
+                [cleanSender]
+            );
+            if (recentRows.length > 0) {
+                existing = recentRows[0];
+                console.log(`🔗 [Aadhaar Merge] Merging back scan into front record ID #${existing.id} for sender ${cleanSender}`);
+            }
+        }
+
+        // Case A: New Record -> INSERT (Populate ONLY ONE image field at first time)
         if (!existing) {
             const finalAadhaarNum = payload.aadhar_number || `DOC${Date.now().toString().slice(-8)}`;
-            const frontUri = isFrontScan ? uploadUri : null;
-            const backUri = isBackScan ? uploadUri : null;
+            
+            // First time: If pure back scan -> back_image_uri, otherwise -> front_image_uri
+            const frontUri = (isBackScan && !isFrontScan) ? null : uploadUri;
+            const backUri = (isBackScan && !isFrontScan) ? uploadUri : null;
 
             const insertSql = `
                 INSERT INTO wh_aadhar_records (
@@ -258,25 +277,28 @@ async function insertOrUpdateAadhaar({
                 status: 'success',
                 action: 'inserted',
                 recordId: result.insertId,
-                side: isFrontScan && isBackScan ? 'both' : (isFrontScan ? 'front' : 'back'),
+                side: isBackScan && !isFrontScan ? 'back' : 'front',
                 message: 'New Aadhaar record created.'
             };
         }
 
-        // Case B: Existing Record Found -> Merge & Upgrade
+        // Case B: Existing Record Found -> Merge & Upgrade (Populate the second image field)
         const updateClauses = [];
         const updateParams = [];
 
-        // 1. Front vs Back Image URI (Strict separation)
-        if (isFrontScan && !isBackScan) {
+        // 1. Non-overlapping image assignment:
+        if (existing.front_image_uri && !existing.back_image_uri) {
+            updateClauses.push('`back_image_uri` = ?');
+            updateParams.push(uploadUri);
+        } else if (existing.back_image_uri && !existing.front_image_uri) {
             updateClauses.push('`front_image_uri` = ?');
             updateParams.push(uploadUri);
-        } else if (isBackScan && !isFrontScan) {
+        } else if (isBackScan) {
             updateClauses.push('`back_image_uri` = ?');
             updateParams.push(uploadUri);
         } else {
-            if (!existing.front_image_uri) { updateClauses.push('`front_image_uri` = ?'); updateParams.push(uploadUri); }
-            if (!existing.back_image_uri) { updateClauses.push('`back_image_uri` = ?'); updateParams.push(uploadUri); }
+            updateClauses.push('`front_image_uri` = ?');
+            updateParams.push(uploadUri);
         }
 
         // 2. Aadhaar Number: If existing is valid, keep it; if new has valid and existing was dummy, update it
