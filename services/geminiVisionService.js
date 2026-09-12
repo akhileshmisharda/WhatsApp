@@ -126,21 +126,12 @@ Strict Rules:
 7. ACCURACY SCORE: Evaluate your own confidence (0-100) and return it in 'accuracyFields'.
 8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only. Do not translate Hindi names, addresses, or boundaries into English.`;
 
-    const userPrompt = `Extract this document scan into the following exact JSON schema:
+    const userPrompt = `Extract this document scan into the following exact JSON schema with field-level confidence scores (0-100):
 {
   "extracted_documents": [
     {
       "party_type": "buyer",
       "document_type": "aadhaar_card",
-      "accuracyFields": {
-        "aadhaarNumber": "100",
-        "fullName_English": "100",
-        "fullName_Hindi": "100",
-        "dob": "100",
-        "fatherName_Hindi": "100",
-        "husbandName_Hindi": "100",
-        "pincode": "100"
-      },
       "aadhaar_card_data": {
         "aadhaarNumber": "12-digit format, e.g. XXXX XXXX XXXX",
         "fullName_English": "Extract full name in English exactly as printed.",
@@ -154,10 +145,26 @@ Strict Rules:
         "fullAddress_English": "Extract complete address in English.",
         "fullAddress_Hindi": "Extract complete address in Hindi (Devanagari script).",
         "pincode": "6-digit PIN code",
-        "pancard": ""
-      }
+        "pancard": "",
+        "aadhaarNumber_accuracy": 100,
+        "fullName_English_accuracy": 100,
+        "fullName_Hindi_accuracy": 100,
+        "dob_accuracy": 100,
+        "fatherName_Hindi_accuracy": 100,
+        "husbandName_Hindi_accuracy": 100,
+        "pincode_accuracy": 100
+      },
+      "aadhaar_card_data_accuracy": 100
     }
-  ]
+  ],
+  "extraction_result": {
+    "scan_quality_rating": 9,
+    "cross_verification_done": true,
+    "verification_result": "Information matched across front and back of card.",
+    "low_accuracy_reason": "",
+    "advice_rescan": "No"
+  },
+  "extraction_accuracy": 100
 }
 
 Output ONLY raw valid JSON.`;
@@ -209,19 +216,21 @@ Output ONLY raw valid JSON.`;
 
             // Extract document data from array or direct object
             let cardData = null;
-            let accuracyFields = {};
+            let cardAccuracy = 100;
             if (Array.isArray(parsed.extracted_documents) && parsed.extracted_documents.length > 0) {
                 const doc = parsed.extracted_documents.find(d => d.document_type === 'aadhaar_card' || d.aadhaar_card_data) || parsed.extracted_documents[0];
                 if (doc) {
                     cardData = doc.aadhaar_card_data || doc;
-                    accuracyFields = doc.accuracyFields || {};
+                    cardAccuracy = doc.aadhaar_card_data_accuracy || parsed.extraction_accuracy || 100;
                 }
             }
             if (!cardData) {
                 cardData = parsed.aadhaar_card_data || parsed;
             }
 
-            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
+            const overallAccuracy = typeof parsed.extraction_accuracy === 'number' ? parsed.extraction_accuracy : cardAccuracy;
+
+            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
             return {
                 success: true,
                 engine: `Gemini (${model})`,
@@ -229,7 +238,14 @@ Output ONLY raw valid JSON.`;
                 tokens: tokens,
                 rawJson: JSON.stringify(parsed),
                 aadhaar_card_data: cardData,
-                accuracyFields: accuracyFields,
+                accuracy: {
+                    overall: overallAccuracy,
+                    aadhaarNumber: cardData.aadhaarNumber_accuracy || 100,
+                    fullName_English: cardData.fullName_English_accuracy || 100,
+                    fullName_Hindi: cardData.fullName_Hindi_accuracy || 100,
+                    dob: cardData.dob_accuracy || 100,
+                    pincode: cardData.pincode_accuracy || 100
+                },
                 data: {
                     aadharNumber: cardData.aadhaarNumber || "Not Found",
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",

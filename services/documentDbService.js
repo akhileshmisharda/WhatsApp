@@ -49,7 +49,13 @@ async function ensureAadhaarColumnsExist() {
             { name: 'tokens_prompt', def: 'INT DEFAULT 0' },
             { name: 'tokens_completion', def: 'INT DEFAULT 0' },
             { name: 'tokens_total', def: 'INT DEFAULT 0' },
-            { name: 'ai_model', def: 'VARCHAR(100) DEFAULT NULL' }
+            { name: 'ai_model', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'accuracy_overall', def: 'INT DEFAULT 100' },
+            { name: 'accuracy_aadhaar_number', def: 'INT DEFAULT 100' },
+            { name: 'accuracy_name_english', def: 'INT DEFAULT 100' },
+            { name: 'accuracy_name_hindi', def: 'INT DEFAULT 100' },
+            { name: 'accuracy_dob', def: 'INT DEFAULT 100' },
+            { name: 'accuracy_pincode', def: 'INT DEFAULT 100' }
         ];
 
         for (const col of requiredCols) {
@@ -88,6 +94,12 @@ async function insertOrUpdateAadhaar({
     tokensCompletion,
     tokensTotal,
     aiModel,
+    accuracyOverall,
+    accuracyAadhaarNumber,
+    accuracyNameEnglish,
+    accuracyNameHindi,
+    accuracyDob,
+    accuracyPincode,
     senderMobile,
     receiverMobile,
     uploadUri
@@ -120,6 +132,12 @@ async function insertOrUpdateAadhaar({
         tokens_completion: typeof tokensCompletion === 'number' ? tokensCompletion : 0,
         tokens_total: typeof tokensTotal === 'number' ? tokensTotal : 0,
         ai_model: sanitizeInput(aiModel) || 'gemini-3.1-flash-lite',
+        accuracy_overall: typeof accuracyOverall === 'number' ? accuracyOverall : 100,
+        accuracy_aadhaar_number: typeof accuracyAadhaarNumber === 'number' ? accuracyAadhaarNumber : 100,
+        accuracy_name_english: typeof accuracyNameEnglish === 'number' ? accuracyNameEnglish : 100,
+        accuracy_name_hindi: typeof accuracyNameHindi === 'number' ? accuracyNameHindi : 100,
+        accuracy_dob: typeof accuracyDob === 'number' ? accuracyDob : 100,
+        accuracy_pincode: typeof accuracyPincode === 'number' ? accuracyPincode : 100,
         sender_mobile: sanitizeInput(senderMobile) || 'Unknown',
         receiver_mobile: sanitizeInput(receiverMobile) || 'Unknown'
     };
@@ -151,8 +169,10 @@ async function insertOrUpdateAadhaar({
                     dob, gender_english, gender_hindi, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
                     pincode, raw_json, tokens_prompt, tokens_completion, tokens_total, ai_model,
+                    accuracy_overall, accuracy_aadhaar_number, accuracy_name_english,
+                    accuracy_name_hindi, accuracy_dob, accuracy_pincode,
                     sender_mobile, receiver_mobile, front_image_uri, back_image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
@@ -176,6 +196,12 @@ async function insertOrUpdateAadhaar({
                 payload.tokens_completion,
                 payload.tokens_total,
                 payload.ai_model,
+                payload.accuracy_overall,
+                payload.accuracy_aadhaar_number,
+                payload.accuracy_name_english,
+                payload.accuracy_name_hindi,
+                payload.accuracy_dob,
+                payload.accuracy_pincode,
                 payload.sender_mobile,
                 payload.receiver_mobile,
                 frontUri,
@@ -201,6 +227,8 @@ async function insertOrUpdateAadhaar({
                 'father_name_hindi', 'husband_name_english', 'husband_name_hindi',
                 'address_english', 'address_hindi', 'pincode', 'raw_json',
                 'tokens_prompt', 'tokens_completion', 'tokens_total', 'ai_model',
+                'accuracy_overall', 'accuracy_aadhaar_number', 'accuracy_name_english',
+                'accuracy_name_hindi', 'accuracy_dob', 'accuracy_pincode',
                 'sender_mobile', 'receiver_mobile'
             ];
 

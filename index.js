@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.6.0-ENTERPRISE-OCR-PROMPT";
+const APP_VERSION = "v4.7.0-FIELD-ACCURACY-TOKENS";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -446,6 +446,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
         });
 
         const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
+        const accuracy = geminiResult.accuracy || { overall: 100, aadhaarNumber: 100, fullName_English: 100, fullName_Hindi: 100, dob: 100, pincode: 100 };
 
         // 3. Upsert into wh_aadhar_records
         if (details.aadharNumber && details.aadharNumber !== "Not Found") {
@@ -470,6 +471,12 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
                 tokensCompletion: tokens.candidatesTokens,
                 tokensTotal: tokens.totalTokens,
                 aiModel: geminiResult.model || geminiResult.engine,
+                accuracyOverall: accuracy.overall,
+                accuracyAadhaarNumber: accuracy.aadhaarNumber,
+                accuracyNameEnglish: accuracy.fullName_English,
+                accuracyNameHindi: accuracy.fullName_Hindi,
+                accuracyDob: accuracy.dob,
+                accuracyPincode: accuracy.pincode,
                 senderMobile: senderMobile,
                 receiverMobile: currentBotNumber,
                 uploadUri: uploadUri
@@ -500,6 +507,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             `🔢 *Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
             `🏠 *Address:* ${displayVal(details.addressEnglish)}\n` +
             `📮 *PIN Code:* ${displayVal(details.pincode)}\n\n` +
+            `🎯 *Accuracy Score:* ${accuracy.overall}%\n` +
             `📊 *Tokens Consumed:* ${tokens.totalTokens} (Prompt: ${tokens.promptTokens} | Output: ${tokens.candidatesTokens})\n\n` +
             `⚡ _Powered by FabKraft - AI_`;
 
