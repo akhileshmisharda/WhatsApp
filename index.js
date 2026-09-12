@@ -388,16 +388,16 @@ async function startBot() {
  */
 async function sendMenuResponse(sock, replyJid, quotedMsg) {
     const menuText = 
-        `👋 *Welcome to Fabkraft Document Assistant!*\n` +
-        `🔖 *Build Version:* \`${APP_VERSION}\`\n\n` +
+        `*Welcome to Fabkraft Document Assistant*\n` +
+        `*Build Version:* \`${APP_VERSION}\`\n\n` +
         `Send your document images with the appropriate caption to extract data & save automatically:\n\n` +
-        `🪪 *Aadhaar Card:*\n` +
-        `• Send image with caption *\`a\`* or *\`aadhar\`*\n` +
-        `• *Extracted:* Name (Eng/Hindi), Relation (W/O, S/O), Father/Husband Name, DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
-        `💳 *PAN Card:*\n` +
-        `• Send image with caption *\`p\`* or *\`pan\`*\n` +
-        `• *Extracted:* Name, Father's Name, DOB, PAN No\n\n` +
-        `⚡ _Powered by FabKraft - AI_`;
+        `*Aadhaar Card:*\n` +
+        `• Caption: *a* or *aadhar*\n` +
+        `• Extracted: Name (English/Hindi), Relation Status, Father/Husband Name, DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
+        `*PAN Card:*\n` +
+        `• Caption: *p* or *pan*\n` +
+        `• Extracted: Name, Father's Name, DOB, PAN No\n\n` +
+        `Powered by FabKraft AI`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
 }
@@ -406,10 +406,10 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
  * Handles Aadhaar Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
  */
 async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini 3.1 Flash-Lite for ${senderMobile}...`);
+    logEvent("AADHAAR_START", `Processing Aadhaar with Gemini for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: `⏳ *Aadhaar Card detected! Extracting details and saving...*`
+        text: `Aadhaar Card detected. Extracting details and saving...`
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -423,7 +423,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
         const timestamp = Date.now();
         const fileName = `aadhar_${senderMobile}_${timestamp}.jpg`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini 1.5 Flash
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'aadhar'),
             extractAadhaarWithGemini(buffer)
@@ -494,47 +494,40 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
 
         let relationLine = "";
         if (details.relationStatus && details.relationStatus !== "Not Found") {
-            relationLine += `🔗 *Relation Status:* ${details.relationStatus}\n`;
+            relationLine += `*Relation Status:* ${details.relationStatus}\n`;
         }
         if (bFather.english !== "Not Found") {
-            relationLine += `👨 *Father's Name (English):* ${bFather.english}\n`;
+            relationLine += `*Father's Name (English):* ${bFather.english}\n`;
         }
         if (bFather.hindi !== "Not Found") {
-            relationLine += `👨 *Father's Name (Hindi):* ${bFather.hindi}\n`;
+            relationLine += `*Father's Name (Hindi):* ${bFather.hindi}\n`;
         }
         if (bHusband.english !== "Not Found") {
-            relationLine += `💍 *Husband's Name (English):* ${bHusband.english}\n`;
+            relationLine += `*Husband's Name (English):* ${bHusband.english}\n`;
         }
         if (bHusband.hindi !== "Not Found") {
-            relationLine += `💍 *Husband's Name (Hindi):* ${bHusband.hindi}\n`;
+            relationLine += `*Husband's Name (Hindi):* ${bHusband.hindi}\n`;
         }
 
-        const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side (Address/Father)' : 'Front Side (Photo/DOB)');
-        const actionLabel = dbResult?.action === 'updated' ? ' 🔄 _(Merged with Existing Record)_' : '';
-
-        const tokenDisplay = tokens.totalTokens > 0 
-            ? `${tokens.totalTokens} (Prompt: ${tokens.promptTokens} | Output: ${tokens.candidatesTokens})` 
-            : `N/A (Vision OCR fallback)`;
+        const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side' : 'Front Side');
+        const actionLabel = dbResult?.action === 'updated' ? ' (Merged with Existing Record)' : '';
 
         const replyText = 
-            `🪪 *AADHAAR EXTRACTED & SAVED*${actionLabel}\n\n` +
-            `🆔 *Upload ID:* #${uploadId}\n` +
-            `📑 *Document Scan:* ${sideLabel}\n` +
-            `🤖 *Engine / Model:* \`${geminiResult.model || geminiResult.engine}\`\n` +
-            `📱 *Bot Account:* ${currentBotNumber}\n` +
-            `📲 *Sent By:* ${senderMobile}\n\n` +
-            `👤 *Name (English):* ${displayVal(details.nameEnglish)}\n` +
-            `👤 *Name (Hindi):* ${displayVal(details.nameHindi)}\n` +
+            `*AADHAAR EXTRACTED & SAVED*${actionLabel}\n\n` +
+            `*Upload ID:* #${uploadId}\n` +
+            `*Document Scan:* ${sideLabel}\n` +
+            `*Sent By:* ${senderMobile}\n\n` +
+            `*Name (English):* ${displayVal(bName.english)}\n` +
+            `*Name (Hindi):* ${displayVal(bName.hindi)}\n` +
             relationLine +
-            `📅 *DOB / YOB:* ${displayVal(details.dob)}\n` +
-            `🚻 *Gender:* ${displayVal(details.genderEnglish)}\n` +
-            `🔢 *Aadhaar Number:* ${displayVal(details.aadharNumber)}\n` +
-            `🔢 *Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
-            `🏠 *Address:* ${displayVal(details.addressEnglish)}\n` +
-            `📮 *PIN Code:* ${displayVal(details.pincode)}\n\n` +
-            `🎯 *Accuracy Score:* ${accuracy.overall}%\n` +
-            `📊 *Tokens Consumed:* ${tokenDisplay}\n\n` +
-            `⚡ _Powered by FabKraft - AI_`;
+            `*DOB / YOB:* ${displayVal(details.dob)}\n` +
+            `*Gender:* ${displayVal(details.genderEnglish)}\n` +
+            `*Aadhaar Number:* ${displayVal(details.aadharNumber)}\n` +
+            `*Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
+            `*Address:* ${displayVal(details.addressEnglish)}\n` +
+            `*PIN Code:* ${displayVal(details.pincode)}\n` +
+            `*Accuracy Score:* ${accuracy.overall}%\n\n` +
+            `Powered by FabKraft AI`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
         logEvent("AADHAAR_SUCCESS", `Aadhaar processed with ID #${uploadId} for ${senderMobile}`);
@@ -542,7 +535,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
     } catch (err) {
         logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
-            text: `❌ *Processing Failed:* ${err.message}. Please try again.`
+            text: `Processing Failed: ${err.message}. Please try again.`
         }, { quoted: quotedRef || imageMsgObj });
     }
 }
@@ -551,10 +544,10 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
  * Handles PAN Upload + Gemini 3.1 Flash-Lite Structured AI Extraction
  */
 async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, quotedRef = null) {
-    logEvent("PAN_START", `Processing PAN with Gemini 3.1 Flash-Lite for ${senderMobile}...`);
+    logEvent("PAN_START", `Processing PAN with Gemini for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
-        text: `⏳ *PAN Card detected! Extracting details and saving...*`
+        text: `PAN Card detected. Extracting details and saving...`
     }, { quoted: quotedRef || imageMsgObj });
 
     try {
@@ -568,7 +561,7 @@ async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, qu
         const timestamp = Date.now();
         const fileName = `pan_${senderMobile}_${timestamp}.jpg`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini 1.5 Flash
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'pan'),
             extractPanWithGemini(buffer)
@@ -607,15 +600,14 @@ async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, qu
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
 
         const replyText = 
-            `💳 *PAN CARD EXTRACTED & SAVED*\n\n` +
-            `🆔 *Upload ID:* #${uploadId}\n` +
-            `📱 *Bot Account:* ${currentBotNumber}\n` +
-            `📲 *Sent By:* ${senderMobile}\n\n` +
-            `👤 *Name:* ${displayVal(details.name)}\n` +
-            `👨 *Father's Name:* ${displayVal(details.fatherName)}\n` +
-            `📅 *Date of Birth:* ${displayVal(details.dob)}\n` +
-            `🔢 *PAN Number:* ${displayVal(details.panNumber)}\n\n` +
-            `⚡ _Powered by FabKraft - AI_`;
+            `*PAN CARD EXTRACTED & SAVED*\n\n` +
+            `*Upload ID:* #${uploadId}\n` +
+            `*Sent By:* ${senderMobile}\n\n` +
+            `*Name:* ${displayVal(details.name)}\n` +
+            `*Father's Name:* ${displayVal(details.fatherName)}\n` +
+            `*Date of Birth:* ${displayVal(details.dob)}\n` +
+            `*PAN Number:* ${displayVal(details.panNumber)}\n\n` +
+            `Powered by FabKraft AI`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || imageMsgObj });
         logEvent("PAN_SUCCESS", `PAN processed with ID #${uploadId} for ${senderMobile}`);
@@ -623,7 +615,7 @@ async function handlePanGeminiFlow(sock, imageMsgObj, replyJid, senderMobile, qu
     } catch (err) {
         logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         await sock.sendMessage(replyJid, {
-            text: `❌ *Processing Failed:* ${err.message}. Please try again.`
+            text: `Processing Failed: ${err.message}. Please try again.`
         }, { quoted: quotedRef || imageMsgObj });
     }
 }
