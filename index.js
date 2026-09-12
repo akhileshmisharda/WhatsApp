@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.7.0-FIELD-ACCURACY-TOKENS";
+const APP_VERSION = "v4.8.0-FRONT-BACK-ACCURACY-MERGE";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -448,9 +448,11 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
         const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
         const accuracy = geminiResult.accuracy || { overall: 100, aadhaarNumber: 100, fullName_English: 100, fullName_Hindi: 100, dob: 100, pincode: 100 };
 
-        // 3. Upsert into wh_aadhar_records
+        let dbResult = null;
+
+        // 3. Upsert into wh_aadhar_records with intelligent Front/Back merging
         if (details.aadharNumber && details.aadharNumber !== "Not Found") {
-            await insertOrUpdateAadhaar({
+            dbResult = await insertOrUpdateAadhaar({
                 uploadId,
                 aadharNumber: details.aadharNumber,
                 virtualId: details.vidNumber,
@@ -493,9 +495,13 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             relationLine += `💍 *Husband's Name:* ${details.husbandNameEnglish}\n`;
         }
 
+        const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side (Address/Father)' : 'Front Side (Photo/DOB)');
+        const actionLabel = dbResult?.action === 'updated' ? ' 🔄 _(Merged with Existing Record)_' : '';
+
         const replyText = 
-            `🪪 *AADHAAR EXTRACTED & SAVED*\n\n` +
+            `🪪 *AADHAAR EXTRACTED & SAVED*${actionLabel}\n\n` +
             `🆔 *Upload ID:* #${uploadId}\n` +
+            `📑 *Document Scan:* ${sideLabel}\n` +
             `📱 *Bot Account:* ${currentBotNumber}\n` +
             `📲 *Sent By:* ${senderMobile}\n\n` +
             `👤 *Name (English):* ${displayVal(details.nameEnglish)}\n` +
