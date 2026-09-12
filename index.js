@@ -29,7 +29,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.0.0-JAMABANDI-PDF-SUPPORT";
+const APP_VERSION = "v5.1.0-GEMINI-3.1-FLASH-LITE";
 
 let sock = null;
 let currentBotNumber = "Unknown";

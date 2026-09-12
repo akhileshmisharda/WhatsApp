@@ -81,25 +81,31 @@ async function getGeminiApiKey() {
     return cachedGeminiKey || process.env.GEMINI_API_KEY || '';
 }
 
+function getGeminiUrl(model, apiKey) {
+    if (apiKey && apiKey.startsWith('AIzaSy')) {
+        return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    }
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
+
 function buildGeminiHeaders(apiKey) {
     const headers = {
         'Content-Type': 'application/json'
     };
     if (apiKey) {
-        headers['x-goog-api-key'] = apiKey;
-        if (apiKey.startsWith('AQ.') || apiKey.startsWith('ya29.')) {
+        if (apiKey.startsWith('AIzaSy')) {
+            headers['x-goog-api-key'] = apiKey;
+        } else {
             headers['Authorization'] = `Bearer ${apiKey}`;
         }
     }
     return headers;
 }
 
-// Working official Gemini vision models on Google AI API
+// Exclusive Gemini 3.1 Flash-Lite Engine
 const MODELS = [
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro'
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash'
 ];
 
 /**
@@ -211,7 +217,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
     // 1. Try Gemini models
     for (const model of MODELS) {
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const url = getGeminiUrl(model, apiKey);
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
                 timeout: 30000
@@ -337,80 +343,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
         }
     }
 
-    // 2. Automatic Fallback to Google Cloud Vision API
-    console.log("🔄 [Fallback] Falling back to Google Cloud Vision OCR for Aadhaar...");
-    try {
-        const visionResult = await extractAadhaarVision(buffer);
-        return {
-            success: true,
-            engine: "Google Cloud Vision",
-            model: "Google Cloud Vision OCR",
-            tokens: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
-            detectedSide: "both",
-            rawJson: JSON.stringify({
-                "aadhaar_card": [
-                    {
-                        "extracted_documents": [
-                            {
-                                "party_type": "buyer",
-                                "document_type": "aadhaar_card",
-                                "detected_side": "both",
-                                "aadhaar_card_data": {
-                                    "aadhaarNumber": visionResult.aadharNumber || "",
-                                    "fullName_English": visionResult.nameEnglish || "",
-                                    "fullName_Hindi": visionResult.nameHindi || "",
-                                    "dob": visionResult.dob || "",
-                                    "gender": visionResult.genderEnglish || "",
-                                    "fatherName_English": "",
-                                    "fatherName_Hindi": "",
-                                    "husbandName_English": "",
-                                    "husbandName_Hindi": "",
-                                    "fullAddress_English": visionResult.addressEnglish || "",
-                                    "fullAddress_Hindi": visionResult.addressHindi || "",
-                                    "pincode": visionResult.pincode || "",
-                                    "pancard": "",
-                                    "aadhaarNumber_accuracy": 90,
-                                    "fullName_English_accuracy": 90,
-                                    "fullName_Hindi_accuracy": 90,
-                                    "dob_accuracy": 90,
-                                    "fatherName_Hindi_accuracy": 90,
-                                    "husbandName_Hindi_accuracy": 90,
-                                    "pincode_accuracy": 90
-                                },
-                                "aadhaar_card_data_accuracy": 90
-                            }
-                        ],
-                        "extraction_result": {
-                            "scan_quality_rating": 8,
-                            "cross_verification_done": true,
-                            "verification_result": "Extracted via Cloud Vision OCR",
-                            "low_accuracy_reason": "",
-                            "advice_rescan": "No",
-                            "source_page_number": 1
-                        },
-                        "extraction_accuracy": 90,
-                        "is_custom": true,
-                        "_display_name": "Aadhar Card"
-                    }
-                ]
-            }),
-            data: visionResult
-        };
-    } catch (visionErr) {
-        console.error("❌ Google Vision fallback error:", visionErr.message);
-        return {
-            success: false,
-            engine: "None",
-            model: "None",
-            tokens: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
-            detectedSide: "both",
-            data: {
-                aadharNumber: "Not Found",
-                nameEnglish: "Not Found",
-                dob: "Not Found"
-            }
-        };
-    }
+    throw new Error('Gemini 3.1 Flash-Lite extraction failed for Aadhaar.');
 }
 
 /**
@@ -461,7 +394,7 @@ Output ONLY raw valid JSON without markdown formatting.
     // 1. Try Gemini models
     for (const model of MODELS) {
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const url = getGeminiUrl(model, apiKey);
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
                 timeout: 15000
@@ -487,26 +420,7 @@ Output ONLY raw valid JSON without markdown formatting.
         }
     }
 
-    // 2. Automatic Fallback to Google Cloud Vision API
-    console.log("🔄 [Fallback] Falling back to Google Cloud Vision OCR for PAN...");
-    try {
-        const visionResult = await extractPanVision(buffer);
-        return {
-            success: true,
-            engine: "Google Cloud Vision",
-            data: visionResult
-        };
-    } catch (visionErr) {
-        console.error("❌ Google Vision fallback error:", visionErr.message);
-        return {
-            success: false,
-            engine: "None",
-            data: {
-                panNumber: "Not Found",
-                name: "Not Found"
-            }
-        };
-    }
+    throw new Error('Gemini 3.1 Flash-Lite extraction failed for PAN.');
 }
 
 /**
@@ -620,7 +534,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
     for (const model of MODELS) {
         try {
             console.log(`🤖 [Gemini] Attempting Jamabandi extraction with ${model} (Mime: ${actualMime})...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const url = getGeminiUrl(model, apiKey);
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
                 timeout: 60000
