@@ -282,6 +282,18 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 }
             }
 
+            const { ensureBilingualName } = require('./transliterate');
+            const nameBilingual = ensureBilingualName(cardData.fullName_English, cardData.fullName_Hindi);
+            const fatherBilingual = ensureBilingualName(cardData.fatherName_English, cardData.fatherName_Hindi);
+            const husbandBilingual = ensureBilingualName(cardData.husbandName_English, cardData.husbandName_Hindi);
+
+            cardData.fullName_English = nameBilingual.english !== "Not Found" ? nameBilingual.english : (cardData.fullName_English || "");
+            cardData.fullName_Hindi = nameBilingual.hindi !== "Not Found" ? nameBilingual.hindi : (cardData.fullName_Hindi || "");
+            cardData.fatherName_English = fatherBilingual.english !== "Not Found" ? fatherBilingual.english : (cardData.fatherName_English || "");
+            cardData.fatherName_Hindi = fatherBilingual.hindi !== "Not Found" ? fatherBilingual.hindi : (cardData.fatherName_Hindi || "");
+            cardData.husbandName_English = husbandBilingual.english !== "Not Found" ? husbandBilingual.english : (cardData.husbandName_English || "");
+            cardData.husbandName_Hindi = husbandBilingual.hindi !== "Not Found" ? husbandBilingual.hindi : (cardData.husbandName_Hindi || "");
+
             console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Side: ${detectedSide}, Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
             return {
                 success: true,
@@ -302,17 +314,17 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 data: {
                     aadharNumber: cleanCardAadhaar,
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
-                    nameEnglish: cardData.fullName_English || "Not Found",
-                    nameHindi: cardData.fullName_Hindi || "Not Found",
+                    nameEnglish: nameBilingual.english,
+                    nameHindi: nameBilingual.hindi,
                     dob: cardData.dob || "Not Found",
                     gender: cardData.gender || "Not Found",
                     genderEnglish: cardData.gender || "Not Found",
                     genderHindi: cardData.gender_hindi || "Not Found",
-                    relationStatus: cardData.relation_status || (cardData.husbandName_English || cardData.husbandName_Hindi ? "W/O" : ((cardData.fatherName_English || cardData.fatherName_Hindi) ? "S/O" : "Not Found")),
-                    fatherNameEnglish: cardData.fatherName_English || "Not Found",
-                    fatherNameHindi: cardData.fatherName_Hindi || "Not Found",
-                    husbandNameEnglish: cardData.husbandName_English || "Not Found",
-                    husbandNameHindi: cardData.husbandName_Hindi || "Not Found",
+                    relationStatus: cardData.relation_status || (husbandBilingual.english !== "Not Found" ? "W/O" : (fatherBilingual.english !== "Not Found" ? "S/O" : "Not Found")),
+                    fatherNameEnglish: fatherBilingual.english,
+                    fatherNameHindi: fatherBilingual.hindi,
+                    husbandNameEnglish: husbandBilingual.english,
+                    husbandNameHindi: husbandBilingual.hindi,
                     addressEnglish: cardData.fullAddress_English || "Not Found",
                     addressHindi: cardData.fullAddress_Hindi || "Not Found",
                     pincode: cardData.pincode || "Not Found"

@@ -151,20 +151,25 @@ async function insertOrUpdateAadhaar({
         }
     }
 
+    const { ensureBilingualName } = require('./transliterate');
+    const nameBilingual = ensureBilingualName(nameEnglish, nameHindi);
+    const fatherBilingual = ensureBilingualName(fatherNameEnglish, fatherNameHindi);
+    const husbandBilingual = ensureBilingualName(husbandNameEnglish, husbandNameHindi);
+
     const payload = {
         upload_id: uploadId || null,
         aadhar_number: cleanAadhaar,
         virtual_id: sanitizeInput(virtualId),
-        name_english: sanitizeInput(nameEnglish),
-        name_hindi: sanitizeInput(nameHindi),
+        name_english: sanitizeInput(nameBilingual.english),
+        name_hindi: sanitizeInput(nameBilingual.hindi),
         dob: sanitizeInput(dob),
         gender_english: sanitizeInput(genderEnglish),
         gender_hindi: sanitizeInput(genderHindi),
         relation_status: resolvedRelation,
-        father_name_english: sanitizeInput(fatherNameEnglish),
-        father_name_hindi: sanitizeInput(fatherNameHindi),
-        husband_name_english: sanitizeInput(husbandNameEnglish),
-        husband_name_hindi: sanitizeInput(husbandNameHindi),
+        father_name_english: sanitizeInput(fatherBilingual.english),
+        father_name_hindi: sanitizeInput(fatherBilingual.hindi),
+        husband_name_english: sanitizeInput(husbandBilingual.english),
+        husband_name_hindi: sanitizeInput(husbandBilingual.hindi),
         address_english: sanitizeInput(addressEnglish),
         address_hindi: sanitizeInput(addressHindi),
         pincode: sanitizeInput(pincode),

@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.3-STRICT-AADHAAR-MATCH";
+const APP_VERSION = "v4.9.4-BILINGUAL-TRANSLITERATION-FIX";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -485,23 +485,28 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             uploadUri: uploadUri
         });
 
+        const { ensureBilingualName } = require('./services/transliterate');
+        const bName = ensureBilingualName(details.nameEnglish, details.nameHindi);
+        const bFather = ensureBilingualName(details.fatherNameEnglish, details.fatherNameHindi);
+        const bHusband = ensureBilingualName(details.husbandNameEnglish, details.husbandNameHindi);
+
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
 
         let relationLine = "";
         if (details.relationStatus && details.relationStatus !== "Not Found") {
             relationLine += `🔗 *Relation Status:* ${details.relationStatus}\n`;
         }
-        if (details.fatherNameEnglish && details.fatherNameEnglish !== "Not Found") {
-            relationLine += `👨 *Father's Name (English):* ${details.fatherNameEnglish}\n`;
+        if (bFather.english !== "Not Found") {
+            relationLine += `👨 *Father's Name (English):* ${bFather.english}\n`;
         }
-        if (details.fatherNameHindi && details.fatherNameHindi !== "Not Found") {
-            relationLine += `👨 *Father's Name (Hindi):* ${details.fatherNameHindi}\n`;
+        if (bFather.hindi !== "Not Found") {
+            relationLine += `👨 *Father's Name (Hindi):* ${bFather.hindi}\n`;
         }
-        if (details.husbandNameEnglish && details.husbandNameEnglish !== "Not Found") {
-            relationLine += `💍 *Husband's Name (English):* ${details.husbandNameEnglish}\n`;
+        if (bHusband.english !== "Not Found") {
+            relationLine += `💍 *Husband's Name (English):* ${bHusband.english}\n`;
         }
-        if (details.husbandNameHindi && details.husbandNameHindi !== "Not Found") {
-            relationLine += `💍 *Husband's Name (Hindi):* ${details.husbandNameHindi}\n`;
+        if (bHusband.hindi !== "Not Found") {
+            relationLine += `💍 *Husband's Name (Hindi):* ${bHusband.hindi}\n`;
         }
 
         const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side (Address/Father)' : 'Front Side (Photo/DOB)');

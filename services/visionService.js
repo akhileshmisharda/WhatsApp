@@ -181,10 +181,10 @@ async function extractAadhaarDetails(imageBuffer) {
                 .trim();
         }
 
-        let fatherNameEnglish = "Not Found";
-        let fatherNameHindi = "Not Found";
-        let husbandNameEnglish = "Not Found";
-        let husbandNameHindi = "Not Found";
+        let fatherNameEnglish = "";
+        let fatherNameHindi = "";
+        let husbandNameEnglish = "";
+        let husbandNameHindi = "";
 
         const fatherEngMatch = text.match(/(?:S\/O|D\/O|C\/O|Care of|Son of|Daughter of)[:\s]+([A-Za-z\s.'-]+?)(?:,|\n|Address|$)/i);
         if (fatherEngMatch) fatherNameEnglish = fatherEngMatch[1].trim();
@@ -198,16 +198,21 @@ async function extractAadhaarDetails(imageBuffer) {
         const husbandHinMatch = text.match(/(?:पत्नी|भार्या)[:\s]+([\u0900-\u097F\s.'-]+?)(?:,|\n|पता|$)/i);
         if (husbandHinMatch) husbandNameHindi = husbandHinMatch[1].trim();
 
+        const { ensureBilingualName } = require('./transliterate');
+        const finalName = ensureBilingualName(nameEnglish, nameHindi);
+        const finalFather = ensureBilingualName(fatherNameEnglish, fatherNameHindi);
+        const finalHusband = ensureBilingualName(husbandNameEnglish, husbandNameHindi);
+
         return {
-            nameEnglish,
-            nameHindi,
+            nameEnglish: finalName.english,
+            nameHindi: finalName.hindi,
             dob,
             genderEnglish,
             genderHindi,
-            fatherNameEnglish,
-            fatherNameHindi,
-            husbandNameEnglish,
-            husbandNameHindi,
+            fatherNameEnglish: finalFather.english,
+            fatherNameHindi: finalFather.hindi,
+            husbandNameEnglish: finalHusband.english,
+            husbandNameHindi: finalHusband.hindi,
             aadharNumber,
             vidNumber,
             addressEnglish,
@@ -225,28 +230,36 @@ async function extractAadhaarDetails(imageBuffer) {
  * Robust 12-digit Aadhaar extraction logic
  */
 function extract12DigitAadhaar(rawText) {
-    // 1. Flatten all line breaks, blank lines, and tabs into single spaces FIRST
-    let cleaned = rawText.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ");
+    // 1. Remove 1947, 1800-xxx, and helpline numbers FIRST so they NEVER get glued to Aadhaar digits
+    let cleaned = rawText.replace(/\b1947\b/g, " ")
+                         .replace(/\b1800\d*\b/g, " ")
+                         .replace(/[\r\n\t]+/g, " ")
+                         .replace(/\s+/g, " ");
 
     // 2. Remove VIDs (16-digit blocks) safely so they don't confuse the 12-digit search
     cleaned = cleaned.replace(/VID\s*:?\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}/gi, "")
                      .replace(/VID\s*:?\s*\d{16}/gi, "");
 
-    // 3. Tokenize and search for 3 consecutive 4-digit groups
+    // 3. Tokenize and search for 3 consecutive 4-digit groups (excluding 1947 and 1800)
     const tokens = cleaned.split(" ").map(t => t.trim()).filter(Boolean);
 
     for (let i = 0; i <= tokens.length - 3; i++) {
-        if (/^\d{4}$/.test(tokens[i]) && 
-            /^\d{4}$/.test(tokens[i + 1]) && 
-            /^\d{4}$/.test(tokens[i + 2])) {
-            return `${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`;
+        const t1 = tokens[i];
+        const t2 = tokens[i + 1];
+        const t3 = tokens[i + 2];
+
+        if (t1 !== "1947" && !t1.startsWith("1800") &&
+            /^\d{4}$/.test(t1) && 
+            /^\d{4}$/.test(t2) && 
+            /^\d{4}$/.test(t3)) {
+            return `${t1} ${t2} ${t3}`;
         }
     }
 
     // 4. Fallback 14-character sliding window (Handles "XXXX XXXX XXXX")
     for (let i = 0; i <= cleaned.length - 14; i++) {
         const windowStr = cleaned.substring(i, i + 14);
-        if (/^\d{4} \d{4} \d{4}$/.test(windowStr)) {
+        if (/^\d{4} \d{4} \d{4}$/.test(windowStr) && !windowStr.startsWith("1947") && !windowStr.startsWith("1800")) {
             return windowStr;
         }
     }
