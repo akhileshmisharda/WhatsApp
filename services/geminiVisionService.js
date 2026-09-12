@@ -518,7 +518,8 @@ Output ONLY raw valid JSON without markdown formatting.
 async function extractJamabandiWithGemini(buffer, mimeType = 'image/jpeg') {
     const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
-    const actualMime = mimeType || 'image/jpeg';
+    const isPdf = mimeType === 'application/pdf' || (typeof mimeType === 'string' && mimeType.toLowerCase().includes('pdf'));
+    const actualMime = isPdf ? 'application/pdf' : 'image/jpeg';
 
     const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN).
 
@@ -609,16 +610,20 @@ Output ONLY raw valid JSON without markdown formatting.`;
         ],
         generationConfig: {
             temperature: 0.0,
+            maxOutputTokens: 8192,
             responseMimeType: "application/json"
         }
     };
 
+    let lastError = null;
+
     for (const model of MODELS) {
         try {
+            console.log(`🤖 [Gemini] Attempting Jamabandi extraction with ${model} (Mime: ${actualMime})...`);
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             const response = await axios.post(url, requestBody, {
                 headers: buildGeminiHeaders(apiKey),
-                timeout: 45000
+                timeout: 60000
             });
 
             const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
@@ -668,11 +673,12 @@ Output ONLY raw valid JSON without markdown formatting.`;
             };
 
         } catch (err) {
-            console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, err.response?.data?.error?.message || err.message);
+            lastError = err.response?.data?.error?.message || err.message;
+            console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, lastError);
         }
     }
 
-    throw new Error('All Gemini models failed to extract Jamabandi document.');
+    throw new Error(lastError ? `Gemini Error: ${lastError}` : 'All Gemini models failed to extract Jamabandi document.');
 }
 
 module.exports = {
