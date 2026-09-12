@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.9.0-TOKEN-METRICS-FIX";
+const APP_VERSION = "v4.9.1-GEMINI-REST-FIX";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -488,10 +488,16 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
 
         let relationLine = "";
         if (details.fatherNameEnglish && details.fatherNameEnglish !== "Not Found") {
-            relationLine += `👨 *Father's Name:* ${details.fatherNameEnglish}\n`;
+            relationLine += `👨 *Father's Name (English):* ${details.fatherNameEnglish}\n`;
+        }
+        if (details.fatherNameHindi && details.fatherNameHindi !== "Not Found") {
+            relationLine += `👨 *Father's Name (Hindi):* ${details.fatherNameHindi}\n`;
         }
         if (details.husbandNameEnglish && details.husbandNameEnglish !== "Not Found") {
-            relationLine += `💍 *Husband's Name:* ${details.husbandNameEnglish}\n`;
+            relationLine += `💍 *Husband's Name (English):* ${details.husbandNameEnglish}\n`;
+        }
+        if (details.husbandNameHindi && details.husbandNameHindi !== "Not Found") {
+            relationLine += `💍 *Husband's Name (Hindi):* ${details.husbandNameHindi}\n`;
         }
 
         const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side (Address/Father)' : 'Front Side (Photo/DOB)');

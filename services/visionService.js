@@ -181,12 +181,33 @@ async function extractAadhaarDetails(imageBuffer) {
                 .trim();
         }
 
+        let fatherNameEnglish = "Not Found";
+        let fatherNameHindi = "Not Found";
+        let husbandNameEnglish = "Not Found";
+        let husbandNameHindi = "Not Found";
+
+        const fatherEngMatch = text.match(/(?:S\/O|D\/O|C\/O|Care of|Son of|Daughter of)[:\s]+([A-Za-z\s.'-]+?)(?:,|\n|Address|$)/i);
+        if (fatherEngMatch) fatherNameEnglish = fatherEngMatch[1].trim();
+
+        const husbandEngMatch = text.match(/(?:W\/O|Wife of)[:\s]+([A-Za-z\s.'-]+?)(?:,|\n|Address|$)/i);
+        if (husbandEngMatch) husbandNameEnglish = husbandEngMatch[1].trim();
+
+        const fatherHinMatch = text.match(/(?:आत्मज|सुपुत्र|पुत्र|सुपुत्री|पिता)[:\s]+([\u0900-\u097F\s.'-]+?)(?:,|\n|पता|$)/i);
+        if (fatherHinMatch) fatherNameHindi = fatherHinMatch[1].trim();
+
+        const husbandHinMatch = text.match(/(?:पत्नी|भार्या)[:\s]+([\u0900-\u097F\s.'-]+?)(?:,|\n|पता|$)/i);
+        if (husbandHinMatch) husbandNameHindi = husbandHinMatch[1].trim();
+
         return {
             nameEnglish,
             nameHindi,
             dob,
             genderEnglish,
             genderHindi,
+            fatherNameEnglish,
+            fatherNameHindi,
+            husbandNameEnglish,
+            husbandNameHindi,
             aadharNumber,
             vidNumber,
             addressEnglish,
@@ -234,7 +255,9 @@ function extract12DigitAadhaar(rawText) {
     const continuousMatch = cleaned.match(/\b\d{12}\b/);
     if (continuousMatch) {
         const d = continuousMatch[0];
-        return `${d.slice(0, 4)} ${d.slice(4, 8)} ${d.slice(8, 12)}`;
+        if (!d.startsWith("1947") && !d.startsWith("1800")) {
+            return `${d.slice(0, 4)} ${d.slice(4, 8)} ${d.slice(8, 12)}`;
+        }
     }
 
     return "Not Found";

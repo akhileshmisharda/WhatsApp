@@ -119,10 +119,10 @@ Strict Rules:
 3. DETECT SIDE: Identify whether the scanned image is the "front" side (contains photo, name, dob, gender, 12-digit aadhaar number), the "back" side (contains address, father/husband name, pincode, barcode/QR), or "both" (contains both front & back).
 4. AADHAAR NUMBER ACCURACY: 
    - On the FRONT side, extract the clean 12-digit Aadhaar number (XXXX XXXX XXXX).
-   - On the BACK side, Aadhaar numbers are typically NOT printed (only helpline numbers like 1947 or barcodes exist). NEVER mistake toll-free numbers (1947, 1800-xxx) or PIN codes for the Aadhaar number. If no valid 12-digit Aadhaar number is printed on the back, leave 'aadhaarNumber': "".
+   - On the BACK side, Aadhaar numbers are NOT printed (only helpline numbers like 1947, 1800-xxx or barcodes exist). NEVER extract toll-free numbers, PIN codes, or barcode digits as Aadhaar number. On the back side, ALWAYS set 'aadhaarNumber': "".
 5. FATHER VS HUSBAND NAME:
-   - S/O, D/O, C/O -> Extract into fatherName_English & fatherName_Hindi. Leave husbandName empty.
-   - W/O (Wife of) -> Extract into husbandName_English & husbandName_Hindi. Leave fatherName empty.
+   - S/O, D/O, C/O, Care of, Son of, Daughter of, आत्मज, सुपुत्र, पुत्र, सुपुत्री, पिता -> Extract the person's name into fatherName_English & fatherName_Hindi. Leave husbandName empty ("").
+   - W/O, Wife of, पत्नी, भार्या -> Extract the husband's name into husbandName_English & husbandName_Hindi. Leave fatherName empty ("").
 6. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling or names.
 7. ZERO FABRICATION: If a field is missing or unreadable, set it to empty string "". Never guess digits or dates.
 8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only.
@@ -138,15 +138,15 @@ Strict Rules:
           "document_type": "aadhaar_card",
           "detected_side": "front",
           "aadhaar_card_data": {
-            "aadhaarNumber": "XXXX XXXX XXXX or empty string if not visible",
+            "aadhaarNumber": "XXXX XXXX XXXX or empty string if not visible or on back side",
             "fullName_English": "Full name in English exactly as printed or empty string",
             "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or empty string",
             "dob": "DD/MM/YYYY or YYYY or empty string",
             "gender": "MALE, FEMALE, पुरुष, महिला or empty string",
-            "fatherName_English": "Name in English ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
-            "fatherName_Hindi": "Name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave empty if W/O is used.",
-            "husbandName_English": "Name in English ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
-            "husbandName_Hindi": "Name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave empty if S/O, D/O, or C/O is used.",
+            "fatherName_English": "Father/Care-of Name in English if listed after S/O, D/O, C/O, आत्मज, सुपुत्र, पुत्र. Leave empty if W/O/पत्नी.",
+            "fatherName_Hindi": "Father/Care-of Name in Hindi (Devanagari) if listed after आत्मज, सुपुत्र, पुत्र, S/O, D/O, C/O. Leave empty if W/O/पत्नी.",
+            "husbandName_English": "Husband Name in English if listed after W/O (Wife of) or पत्नी. Leave empty if S/O/D/O/C/O/आत्मज.",
+            "husbandName_Hindi": "Husband Name in Hindi (Devanagari) if listed after पत्नी or W/O. Leave empty if S/O/D/O/C/O/आत्मज.",
             "fullAddress_English": "Complete address in English or empty string",
             "fullAddress_Hindi": "Complete address in Hindi (Devanagari script) or empty string",
             "pincode": "6-digit PIN code or empty string",
@@ -180,7 +180,7 @@ Strict Rules:
 Output ONLY raw valid JSON without markdown formatting.`;
 
     const requestBody = {
-        system_instruction: {
+        systemInstruction: {
             parts: [
                 { text: systemPrompt }
             ]
@@ -190,8 +190,8 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 parts: [
                     { text: userPrompt },
                     {
-                        inline_data: {
-                            mime_type: 'image/jpeg',
+                        inlineData: {
+                            mimeType: 'image/jpeg',
                             data: base64Data
                         }
                     }
@@ -200,7 +200,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
         ],
         generationConfig: {
             temperature: 0.0,
-            response_mime_type: "application/json"
+            responseMimeType: "application/json"
         }
     };
 
@@ -285,7 +285,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     pincode: cardData.pincode_accuracy || 100
                 },
                 data: {
-                    aadharNumber: (cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.startsWith("1947")) ? cardData.aadhaarNumber : "Not Found",
+                    aadharNumber: (detectedSide !== "back" && cardData.aadhaarNumber && cardData.aadhaarNumber.length >= 10 && !cardData.aadhaarNumber.startsWith("1947") && !cardData.aadhaarNumber.startsWith("1800")) ? cardData.aadhaarNumber : "Not Found",
                     vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
                     nameEnglish: cardData.fullName_English || "Not Found",
                     nameHindi: cardData.fullName_Hindi || "Not Found",
@@ -412,8 +412,8 @@ Output ONLY raw valid JSON without markdown formatting.
                 parts: [
                     { text: prompt },
                     {
-                        inline_data: {
-                            mime_type: 'image/jpeg',
+                        inlineData: {
+                            mimeType: 'image/jpeg',
                             data: base64Data
                         }
                     }
@@ -422,7 +422,7 @@ Output ONLY raw valid JSON without markdown formatting.
         ],
         generationConfig: {
             temperature: 0.1,
-            response_mime_type: "application/json"
+            responseMimeType: "application/json"
         }
     };
 
