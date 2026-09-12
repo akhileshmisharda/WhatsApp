@@ -120,8 +120,8 @@ app.get('/send-test', async (req, res) => {
 
 app.get('/health', (req, res) => res.send('OK'));
 
-app.listen(PORT, () => {
-    logEvent("SERVER", `Express server listening on port ${PORT} [Version: ${APP_VERSION}]`);
+app.listen(PORT, '0.0.0.0', () => {
+    logEvent("SERVER", `Express server listening on 0.0.0.0:${PORT} [Version: ${APP_VERSION}]`);
 });
 
 // ---------------------------------------------------------
