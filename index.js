@@ -28,7 +28,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v4.4.0-REGISTRY-AUTH-AI";
+const APP_VERSION = "v4.5.0-STRUCTURED-AADHAAR-SCHEMA";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -456,9 +456,14 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
                 dob: details.dob,
                 genderEnglish: details.genderEnglish,
                 genderHindi: details.genderHindi,
+                fatherNameEnglish: details.fatherNameEnglish,
+                fatherNameHindi: details.fatherNameHindi,
+                husbandNameEnglish: details.husbandNameEnglish,
+                husbandNameHindi: details.husbandNameHindi,
                 addressEnglish: details.addressEnglish,
                 addressHindi: details.addressHindi,
                 pincode: details.pincode,
+                rawJson: geminiResult.rawJson || geminiResult.aadhaar_card_data,
                 senderMobile: senderMobile,
                 receiverMobile: currentBotNumber,
                 uploadUri: uploadUri
@@ -467,6 +472,14 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
 
+        let relationLine = "";
+        if (details.fatherNameEnglish && details.fatherNameEnglish !== "Not Found") {
+            relationLine += `👨 *Father's Name:* ${details.fatherNameEnglish}\n`;
+        }
+        if (details.husbandNameEnglish && details.husbandNameEnglish !== "Not Found") {
+            relationLine += `💍 *Husband's Name:* ${details.husbandNameEnglish}\n`;
+        }
+
         const replyText = 
             `🪪 *AADHAAR EXTRACTED & SAVED*\n\n` +
             `🆔 *Upload ID:* #${uploadId}\n` +
@@ -474,6 +487,7 @@ async function handleAadhaarGeminiFlow(sock, imageMsgObj, replyJid, senderMobile
             `📲 *Sent By:* ${senderMobile}\n\n` +
             `👤 *Name (English):* ${displayVal(details.nameEnglish)}\n` +
             `👤 *Name (Hindi):* ${displayVal(details.nameHindi)}\n` +
+            relationLine +
             `📅 *DOB / YOB:* ${displayVal(details.dob)}\n` +
             `🚻 *Gender:* ${displayVal(details.genderEnglish)}\n` +
             `🔢 *Aadhaar Number:* ${displayVal(details.aadharNumber)}\n` +

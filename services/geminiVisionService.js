@@ -114,21 +114,26 @@ async function extractAadhaarWithGemini(buffer) {
     const apiKey = await getGeminiApiKey();
     const base64Data = buffer.toString('base64');
     const prompt = `
-Analyze this Indian Aadhaar Card image and extract the following details into valid JSON format.
+Analyze this Indian Aadhaar Card image and extract the following details into valid JSON format matching the schema below.
 If a field is not visible or not found, set its value to null.
 
 JSON Schema:
 {
-  "aadhar_number": "12-digit clean number formatted as XXXX XXXX XXXX or null",
-  "vid_number": "16-digit Virtual ID if present or null",
-  "name_english": "Full name in English or null",
-  "name_hindi": "Full name in Hindi (Devanagari) or null",
-  "dob": "Date of birth in DD/MM/YYYY format or Year of birth or null",
-  "gender_english": "Male / Female / Transgender or null",
-  "gender_hindi": "पुरुष / महिला / ट्रांसजेंडर or null",
-  "address_english": "Complete address in English or null",
-  "address_hindi": "Complete address in Hindi or null",
-  "pincode": "6-digit Indian postal PIN code or null"
+  "aadhaar_card_data": {
+    "aadhaarNumber": "12-digit format, e.g. XXXX XXXX XXXX or null",
+    "fullName_English": "Full name in English exactly as printed or null",
+    "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or null",
+    "dob": "Date of birth in DD/MM/YYYY format or Year of birth or null",
+    "gender": "Extract gender (e.g., MALE, FEMALE, पुरुष, महिला) or null",
+    "fatherName_English": "Extract name in English ONLY if listed after S/O, D/O, or C/O. Leave null if W/O is used.",
+    "fatherName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after S/O, D/O, or C/O. Leave null if W/O is used.",
+    "husbandName_English": "Extract name in English ONLY if listed after W/O (Wife of). Leave null if S/O, D/O, or C/O is used.",
+    "husbandName_Hindi": "Extract name in Hindi (Devanagari script) ONLY if listed after W/O (Wife of). Leave null if S/O, D/O, or C/O is used.",
+    "fullAddress_English": "Complete address in English or null",
+    "fullAddress_Hindi": "Complete address in Hindi (Devanagari script) or null",
+    "pincode": "6-digit Indian postal PIN code or null",
+    "pancard": null
+  }
 }
 
 Output ONLY raw valid JSON without markdown formatting.
@@ -167,21 +172,30 @@ Output ONLY raw valid JSON without markdown formatting.
             const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
             const parsed = JSON.parse(cleaned);
 
+            const cardData = parsed.aadhaar_card_data || parsed;
+
             console.log(`✅ [Gemini] Successfully extracted Aadhaar using ${model}`);
             return {
                 success: true,
                 engine: `Gemini (${model})`,
+                rawJson: JSON.stringify(parsed),
+                aadhaar_card_data: cardData,
                 data: {
-                    aadharNumber: parsed.aadhar_number || "Not Found",
-                    vidNumber: parsed.vid_number || "Not Found",
-                    nameEnglish: parsed.name_english || "Not Found",
-                    nameHindi: parsed.name_hindi || "Not Found",
-                    dob: parsed.dob || "Not Found",
-                    genderEnglish: parsed.gender_english || "Not Found",
-                    genderHindi: parsed.gender_hindi || "Not Found",
-                    addressEnglish: parsed.address_english || "Not Found",
-                    addressHindi: parsed.address_hindi || "Not Found",
-                    pincode: parsed.pincode || "Not Found"
+                    aadharNumber: cardData.aadhaarNumber || "Not Found",
+                    vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
+                    nameEnglish: cardData.fullName_English || "Not Found",
+                    nameHindi: cardData.fullName_Hindi || "Not Found",
+                    dob: cardData.dob || "Not Found",
+                    gender: cardData.gender || "Not Found",
+                    genderEnglish: cardData.gender || "Not Found",
+                    genderHindi: cardData.gender_hindi || "Not Found",
+                    fatherNameEnglish: cardData.fatherName_English || "Not Found",
+                    fatherNameHindi: cardData.fatherName_Hindi || "Not Found",
+                    husbandNameEnglish: cardData.husbandName_English || "Not Found",
+                    husbandNameHindi: cardData.husbandName_Hindi || "Not Found",
+                    addressEnglish: cardData.fullAddress_English || "Not Found",
+                    addressHindi: cardData.fullAddress_Hindi || "Not Found",
+                    pincode: cardData.pincode || "Not Found"
                 }
             };
         } catch (err) {

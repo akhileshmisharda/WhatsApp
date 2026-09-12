@@ -33,6 +33,33 @@ async function logImageUpload({ receiverMobile, senderMobile, imageCaption, imag
     }
 }
 
+let columnsChecked = false;
+async function ensureAadhaarColumnsExist() {
+    if (columnsChecked) return;
+    try {
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_aadhar_records`);
+        const existingCols = cols.map(c => c.Field);
+        
+        const requiredCols = [
+            { name: 'father_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'father_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'husband_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'husband_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'raw_json', def: 'LONGTEXT DEFAULT NULL' }
+        ];
+
+        for (const col of requiredCols) {
+            if (!existingCols.includes(col.name)) {
+                await pool.execute(`ALTER TABLE wh_aadhar_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_aadhar_records`);
+            }
+        }
+        columnsChecked = true;
+    } catch (err) {
+        console.warn('⚠️ [Database] Column check warning:', err.message);
+    }
+}
+
 /**
  * Inserts or updates an Aadhaar record in `wh_aadhar_records`
  */
@@ -45,13 +72,20 @@ async function insertOrUpdateAadhaar({
     dob,
     genderEnglish,
     genderHindi,
+    fatherNameEnglish,
+    fatherNameHindi,
+    husbandNameEnglish,
+    husbandNameHindi,
     addressEnglish,
     addressHindi,
     pincode,
+    rawJson,
     senderMobile,
     receiverMobile,
     uploadUri
 }) {
+    await ensureAadhaarColumnsExist();
+
     const cleanAadhaar = sanitizeInput(aadharNumber);
     if (!cleanAadhaar) {
         throw new Error("Aadhaar Number is required for database operations.");
@@ -66,9 +100,14 @@ async function insertOrUpdateAadhaar({
         dob: sanitizeInput(dob),
         gender_english: sanitizeInput(genderEnglish),
         gender_hindi: sanitizeInput(genderHindi),
+        father_name_english: sanitizeInput(fatherNameEnglish),
+        father_name_hindi: sanitizeInput(fatherNameHindi),
+        husband_name_english: sanitizeInput(husbandNameEnglish),
+        husband_name_hindi: sanitizeInput(husbandNameHindi),
         address_english: sanitizeInput(addressEnglish),
         address_hindi: sanitizeInput(addressHindi),
         pincode: sanitizeInput(pincode),
+        raw_json: typeof rawJson === 'object' ? JSON.stringify(rawJson) : sanitizeInput(rawJson),
         sender_mobile: sanitizeInput(senderMobile) || 'Unknown',
         receiver_mobile: sanitizeInput(receiverMobile) || 'Unknown'
     };
@@ -97,9 +136,10 @@ async function insertOrUpdateAadhaar({
             const insertSql = `
                 INSERT INTO wh_aadhar_records (
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
-                    dob, gender_english, gender_hindi, address_english, address_hindi,
-                    pincode, sender_mobile, receiver_mobile, front_image_uri, back_image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    dob, gender_english, gender_hindi, father_name_english, father_name_hindi,
+                    husband_name_english, husband_name_hindi, address_english, address_hindi,
+                    pincode, raw_json, sender_mobile, receiver_mobile, front_image_uri, back_image_uri
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
@@ -111,9 +151,14 @@ async function insertOrUpdateAadhaar({
                 payload.dob,
                 payload.gender_english,
                 payload.gender_hindi,
+                payload.father_name_english,
+                payload.father_name_hindi,
+                payload.husband_name_english,
+                payload.husband_name_hindi,
                 payload.address_english,
                 payload.address_hindi,
                 payload.pincode,
+                payload.raw_json,
                 payload.sender_mobile,
                 payload.receiver_mobile,
                 frontUri,
@@ -135,23 +180,25 @@ async function insertOrUpdateAadhaar({
 
             const fields = [
                 'upload_id', 'virtual_id', 'name_english', 'name_hindi',
-                'dob', 'gender_english', 'gender_hindi', 'address_english',
-                'address_hindi', 'pincode', 'sender_mobile', 'receiver_mobile'
+                'dob', 'gender_english', 'gender_hindi', 'father_name_english',
+                'father_name_hindi', 'husband_name_english', 'husband_name_hindi',
+                'address_english', 'address_hindi', 'pincode', 'raw_json',
+                'sender_mobile', 'receiver_mobile'
             ];
 
             for (const f of fields) {
                 if (payload[f] !== null) {
-                    updateClauses.push(`${f} = ?`);
+                    updateClauses.push(`\`${f}\` = ?`);
                     updateParams.push(payload[f]);
                 }
             }
 
             if (frontUri !== null) {
-                updateClauses.push('front_image_uri = ?');
+                updateClauses.push('`front_image_uri` = ?');
                 updateParams.push(frontUri);
             }
             if (backUri !== null) {
-                updateClauses.push('back_image_uri = ?');
+                updateClauses.push('`back_image_uri` = ?');
                 updateParams.push(backUri);
             }
 
