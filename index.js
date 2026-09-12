@@ -109,8 +109,8 @@ app.get('/send-test', async (req, res) => {
 
 app.get('/health', (req, res) => res.send('OK'));
 
-app.listen(PORT, () => {
-    console.log(`🚀 [Server] Cloud Run HTTP Listener active on port ${PORT} (${APP_VERSION})`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 [Server] Cloud Run HTTP Listener active on 0.0.0.0:${PORT} (${APP_VERSION})`);
 });
 
 // ---------------------------------------------------------

@@ -557,6 +557,13 @@ async function insertOrUpdatePan({
                 action: 'updated',
                 message: 'Existing PAN record updated.'
             };
+        }
+    } catch (err) {
+        console.error('❌ [documentDbService] PAN DB Error:', err.message);
+        throw err;
+    }
+}
+
 let jamabandiTableChecked = false;
 async function ensureJamabandiTableExists() {
     if (jamabandiTableChecked) return;
