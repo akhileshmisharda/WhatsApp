@@ -1,0 +1,23 @@
+{
+  "name": "whatsapperp",
+  "version": "1.0.0",
+  "description": "WhatsApp Document Parser and Uploader for Fabkraft ERP",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google-cloud/vision": "^5.3.7",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "axios": "^1.19.0",
+    "express": "^4.21.2",
+    "form-data": "^4.0.2",
+    "mysql2": "^3.23.2",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

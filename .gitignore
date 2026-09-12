@@ -1,0 +1,12 @@
+node_modules/
+npm-debug.log
+uploads/
+auth/
+output.txt
+*.traineddata
+0)
+l.includes(nameEnglish))
+line.trim())
+t.trim()).filter(Boolean)
+.env
+google-key.json
