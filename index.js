@@ -39,7 +39,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.2-LID-ACCESS-FIX";
+const APP_VERSION = "v5.4.3-STRICT-TRIGGER-SILENT-CHATS";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -610,19 +610,49 @@ async function startBotSession(botConfig) {
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg, sessionState);
 
+                // Command Triggers:
+                const isAadhaarTag = /^(a|aadhar|adhar|aadhaar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
+                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
+                const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
+                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
+                const isCustomMenuTag = botConfig.menu_type === 'CUSTOM_MENU' && /^(hi|hello|hey|menu|help|start|1|2|3|4)$/i.test(captionText);
+
+                // Determine if this incoming message is an intentional bot command/trigger
+                let isBotCommand = false;
+
+                if (botConfig.menu_type === 'CUSTOM_MENU') {
+                    isBotCommand = isCustomMenuTag;
+                } else {
+                    // DOCUMENT_OCR Bot Line:
+                    // 1. Exact greeting/menu command (text only)
+                    // 2. Document upload with valid tag (a, p, j, s)
+                    if (isExactGreeting && !isMedia) {
+                        isBotCommand = true;
+                    } else if ((isMedia || quotedMsg) && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) {
+                        isBotCommand = true;
+                    }
+                }
+
+                // If NOT a bot trigger, DO NOTHING! Let normal human chat work without any bot interruption.
+                if (!isBotCommand) {
+                    continue;
+                }
+
                 // ---------------------------------------------------------
                 // ACCESS CONTROL LAYER (WH_ALLOWED_USERS WHITELIST CHECK)
+                // Evaluated ONLY when someone intentionally triggers a bot command
                 // ---------------------------------------------------------
                 const authCheck = await isSenderAllowed(senderMobile, sessionId);
                 if (!authCheck.allowed) {
-                    logEvent("ACCESS_DENIED", `Blocked sender ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
+                    logEvent("ACCESS_DENIED", `Blocked unauthorized trigger from ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
                     await sock.sendMessage(senderJid, {
                         text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
                     }, { quoted: msg });
                     continue;
                 }
 
-                logEvent("LIVE_MESSAGE", `[${sessionId}] From: ${senderMobile} (${authCheck.user?.user_name || 'User'}) | Text: "${text}" | Media: ${isMedia}`);
+                logEvent("LIVE_MESSAGE", `[${sessionId}] Triggered by: ${senderMobile} (${authCheck.user?.user_name || 'User'}) | Text: "${text}" | Media: ${isMedia}`);
 
                 let targetMsgObj = msg;
                 let quotedRef = null;
@@ -655,41 +685,20 @@ async function startBotSession(botConfig) {
                     continue;
                 }
 
-                // Default / DOCUMENT_OCR Menu Workflow:
-                const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
-                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
-                const isJamabandiTag = /^(j|jamabandi|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("जमाबंदी");
-                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
-                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
-
-                if (msg.key.fromMe) {
-                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) || (isExactGreeting && !isMedia))) {
-                        continue;
-                    }
-                }
-
+                // DOCUMENT_OCR Flow:
                 if (isExactGreeting && !isMedia) {
                     logEvent("MENU_REPLY", `Sending OCR menu to ${senderMobile}`);
                     await sendMenuResponse(sock, senderJid, msg, sessionState.currentBotNumber);
                     continue;
                 }
 
-                if (!isAadhaarTag && !isPanTag && !isJamabandiTag && !isSaleDeedTag) {
-                    if (!isMedia) {
-                        await sock.sendMessage(senderJid, {
-                            text: `🤖 Welcome! Send document scan (Aadhaar, PAN, Jamabandi, Sale Deed) with caption *a*, *p*, *j*, or *s*, or type *menu* for help.`
-                        }, { quoted: msg });
-                    }
-                    continue;
-                }
-
-                if (isMedia && isAadhaarTag) {
+                if (isAadhaarTag) {
                     await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
-                } else if (isMedia && isPanTag) {
+                } else if (isPanTag) {
                     await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
-                } else if (isMedia && isJamabandiTag) {
+                } else if (isJamabandiTag) {
                     await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
-                } else if (isMedia && isSaleDeedTag) {
+                } else if (isSaleDeedTag) {
                     await handleSaleDeedGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 }
             }

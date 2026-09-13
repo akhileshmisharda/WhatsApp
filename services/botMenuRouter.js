@@ -54,10 +54,8 @@ async function handleCustomMenuFlow({ sock, botConfig, msg, senderMobile, replyJ
         return;
     }
 
-    // Default fallback reply
-    await sock.sendMessage(replyJid, {
-        text: `🤖 Hello! Type *menu* or *hi* to see available options.`
-    }, { quoted: quotedRef || msg });
+    // If not a recognized menu command, stay completely silent for normal conversation
+    return;
 }
 
 module.exports = {
