@@ -32,7 +32,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.3.0-SALE-DEED-PARSER";
+const APP_VERSION = "v5.3.2-SCHEMA-CARD-RECORDS";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -511,7 +511,7 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
 
         let dbResult = null;
 
-        // 3. Upsert into wh_aadhar_records with intelligent Front/Back merging
+        // 3. Upsert into wh_aadhar_card_records with intelligent Front/Back merging
         dbResult = await insertOrUpdateAadhaar({
             uploadId,
             aadharNumber: details.aadharNumber,
@@ -647,7 +647,7 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
             uploadUri: uploadUri
         });
 
-        // 3. Upsert into wh_pan_records
+        // 3. Upsert into wh_pan_card_records
         let panResult = null;
         if (details.panNumber && details.panNumber !== "Not Found") {
             panResult = await insertOrUpdatePan({
@@ -735,7 +735,7 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
             uploadUri: uploadUri
         });
 
-        // 3. Insert record into wh_jamabandi_records
+        // 3. Insert record into wh_old_jamabandi_records
         const jbResult = await insertJamabandiRecord({
             uploadId,
             formName: details.formName,

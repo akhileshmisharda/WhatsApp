@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS `wh_uploads` (
 -- --------------------------------------------------------------------
 -- 2. Aadhaar Detailed Records Table
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `wh_aadhar_records` (
+CREATE TABLE IF NOT EXISTS `wh_aadhar_card_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
     `aadhar_number` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS `wh_aadhar_records` (
 -- --------------------------------------------------------------------
 -- 3. PAN Detailed Records Table
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `wh_pan_records` (
+CREATE TABLE IF NOT EXISTS `wh_pan_card_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
     `pan_number` VARCHAR(20) NOT NULL UNIQUE COMMENT '10-character Alphanumeric PAN',
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS `wh_baileys_auth` (
 -- --------------------------------------------------------------------
 -- 5. Rajasthan Jamabandi (P-26C) Detailed Records Table
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `wh_jamabandi_records` (
+CREATE TABLE IF NOT EXISTS `wh_old_jamabandi_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
     `form_name` VARCHAR(255) DEFAULT NULL,

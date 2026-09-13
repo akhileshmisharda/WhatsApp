@@ -37,7 +37,49 @@ let columnsChecked = false;
 async function ensureAadhaarColumnsExist() {
     if (columnsChecked) return;
     try {
-        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_aadhar_records`);
+        const createSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_aadhar_card_records\` (
+                \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+                \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`aadhar_number\` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',
+                \`virtual_id\` VARCHAR(25) DEFAULT NULL COMMENT '16-digit VID',
+                \`name_english\` VARCHAR(255) DEFAULT NULL,
+                \`name_hindi\` VARCHAR(255) DEFAULT NULL,
+                \`dob\` VARCHAR(20) DEFAULT NULL COMMENT 'DOB or YOB (DD/MM/YYYY or YYYY)',
+                \`gender_english\` VARCHAR(20) DEFAULT NULL,
+                \`gender_hindi\` VARCHAR(50) DEFAULT NULL,
+                \`relation_status\` VARCHAR(50) DEFAULT NULL COMMENT 'W/O, S/O, D/O, or C/O',
+                \`father_name_english\` VARCHAR(255) DEFAULT NULL,
+                \`father_name_hindi\` VARCHAR(255) DEFAULT NULL,
+                \`husband_name_english\` VARCHAR(255) DEFAULT NULL,
+                \`husband_name_hindi\` VARCHAR(255) DEFAULT NULL,
+                \`address_english\` TEXT DEFAULT NULL,
+                \`address_hindi\` TEXT DEFAULT NULL,
+                \`pincode\` VARCHAR(10) DEFAULT NULL,
+                \`raw_json\` LONGTEXT DEFAULT NULL,
+                \`tokens_prompt\` INT DEFAULT 0,
+                \`tokens_completion\` INT DEFAULT 0,
+                \`tokens_total\` INT DEFAULT 0,
+                \`ai_model\` VARCHAR(100) DEFAULT NULL,
+                \`accuracy_overall\` INT DEFAULT 100,
+                \`accuracy_aadhaar_number\` INT DEFAULT 100,
+                \`accuracy_name_english\` INT DEFAULT 100,
+                \`accuracy_name_hindi\` INT DEFAULT 100,
+                \`accuracy_dob\` INT DEFAULT 100,
+                \`accuracy_pincode\` INT DEFAULT 100,
+                \`sender_mobile\` VARCHAR(25) NOT NULL,
+                \`receiver_mobile\` VARCHAR(25) NOT NULL,
+                \`front_image_uri\` VARCHAR(500) DEFAULT NULL,
+                \`back_image_uri\` VARCHAR(500) DEFAULT NULL,
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_aadhar_number\` (\`aadhar_number\`),
+                INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createSql);
+
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_aadhar_card_records`);
         const existingCols = cols.map(c => c.Field);
         
         const requiredCols = [
@@ -61,8 +103,8 @@ async function ensureAadhaarColumnsExist() {
 
         for (const col of requiredCols) {
             if (!existingCols.includes(col.name)) {
-                await pool.execute(`ALTER TABLE wh_aadhar_records ADD COLUMN \`${col.name}\` ${col.def}`);
-                console.log(`✅ [Database] Added missing column '${col.name}' to wh_aadhar_records`);
+                await pool.execute(`ALTER TABLE wh_aadhar_card_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_aadhar_card_records`);
             }
         }
         columnsChecked = true;
@@ -83,7 +125,7 @@ function shouldUpdateField(newVal, newAcc, oldVal, oldAcc) {
 }
 
 /**
- * Inserts or updates an Aadhaar record in `wh_aadhar_records` with multi-sided (Front/Back) merging and accuracy-based field upgrades.
+ * Inserts or updates an Aadhaar record in `wh_aadhar_card_records` with multi-sided (Front/Back) merging and accuracy-based field upgrades.
  */
 async function insertOrUpdateAadhaar({
     uploadId,
@@ -194,7 +236,7 @@ async function insertOrUpdateAadhaar({
         // 1. Strict Lookup: Exact valid 12-digit Aadhaar Number ONLY (Format: "XXXX XXXX XXXX")
         if (payload.aadhar_number && /^\d{4}\s\d{4}\s\d{4}$/.test(payload.aadhar_number)) {
             const [rows] = await pool.execute(
-                'SELECT * FROM wh_aadhar_records WHERE aadhar_number = ? LIMIT 1',
+                'SELECT * FROM wh_aadhar_card_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
             );
             if (rows.length > 0) {
@@ -216,7 +258,7 @@ async function insertOrUpdateAadhaar({
             const backUri = (isBackScan && !isFrontScan) ? uploadUri : null;
 
             const insertSql = `
-                INSERT INTO wh_aadhar_records (
+                INSERT INTO wh_aadhar_card_records (
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
                     dob, gender_english, gender_hindi, relation_status, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
@@ -447,7 +489,7 @@ async function insertOrUpdateAadhaar({
 
         updateParams.push(existing.id);
         const updateSql = `
-            UPDATE wh_aadhar_records
+            UPDATE wh_aadhar_card_records
             SET ${updateClauses.join(', ')}
             WHERE id = ?
         `;
@@ -468,8 +510,37 @@ async function insertOrUpdateAadhaar({
     }
 }
 
+let panCardTableChecked = false;
+async function ensurePanCardTableExists() {
+    if (panCardTableChecked) return;
+    try {
+        const createSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_pan_card_records\` (
+                \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+                \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`pan_number\` VARCHAR(20) NOT NULL UNIQUE COMMENT '10-character Alphanumeric PAN',
+                \`name\` VARCHAR(255) DEFAULT NULL,
+                \`father_name\` VARCHAR(255) DEFAULT NULL,
+                \`dob\` VARCHAR(20) DEFAULT NULL,
+                \`sender_mobile\` VARCHAR(25) NOT NULL,
+                \`receiver_mobile\` VARCHAR(25) NOT NULL,
+                \`image_uri\` VARCHAR(500) DEFAULT NULL,
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_pan_number\` (\`pan_number\`),
+                INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createSql);
+        panCardTableChecked = true;
+        console.log("✅ [Database] Checked/Created 'wh_pan_card_records' table");
+    } catch (err) {
+        console.warn("⚠️ [Database] PAN Card table check warning:", err.message);
+    }
+}
+
 /**
- * Inserts or updates a PAN record in `wh_pan_records`
+ * Inserts or updates a PAN record in `wh_pan_card_records`
  */
 async function insertOrUpdatePan({
     uploadId,
@@ -481,6 +552,8 @@ async function insertOrUpdatePan({
     receiverMobile,
     uploadUri
 }) {
+    await ensurePanCardTableExists();
+
     const cleanPan = sanitizeInput(panNumber);
     if (!cleanPan) {
         throw new Error("PAN Number is required for database operations.");
@@ -499,13 +572,13 @@ async function insertOrUpdatePan({
 
     try {
         const [rows] = await pool.execute(
-            'SELECT * FROM wh_pan_records WHERE pan_number = ?',
+            'SELECT * FROM wh_pan_card_records WHERE pan_number = ?',
             [payload.pan_number]
         );
 
         if (rows.length === 0) {
             const insertSql = `
-                INSERT INTO wh_pan_records (
+                INSERT INTO wh_pan_card_records (
                     upload_id, pan_number, name, father_name, dob,
                     sender_mobile, receiver_mobile, image_uri
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -541,12 +614,12 @@ async function insertOrUpdatePan({
             }
 
             if (updateClauses.length === 0) {
-                return { status: 'success', action: 'none', message: 'No new data.' };
+                return { status: 'success', action: 'none', recordId: rows[0].id, message: 'No new data.' };
             }
 
             updateParams.push(payload.pan_number);
             const updateSql = `
-                UPDATE wh_pan_records
+                UPDATE wh_pan_card_records
                 SET ${updateClauses.join(', ')}
                 WHERE pan_number = ?
             `;
@@ -555,6 +628,7 @@ async function insertOrUpdatePan({
             return {
                 status: 'success',
                 action: 'updated',
+                recordId: rows[0].id,
                 message: 'Existing PAN record updated.'
             };
         }
@@ -569,7 +643,7 @@ async function ensureJamabandiTableExists() {
     if (jamabandiTableChecked) return;
     try {
         const createSql = `
-            CREATE TABLE IF NOT EXISTS \`wh_jamabandi_records\` (
+            CREATE TABLE IF NOT EXISTS \`wh_old_jamabandi_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
                 \`form_name\` VARCHAR(255) DEFAULT NULL,
@@ -611,7 +685,7 @@ async function ensureJamabandiTableExists() {
         `;
         await pool.execute(createSql);
 
-        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_jamabandi_records`);
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_old_jamabandi_records`);
         const existingCols = cols.map(c => c.Field);
 
         const requiredCols = [
@@ -648,20 +722,20 @@ async function ensureJamabandiTableExists() {
 
         for (const col of requiredCols) {
             if (!existingCols.includes(col.name)) {
-                await pool.execute(`ALTER TABLE wh_jamabandi_records ADD COLUMN \`${col.name}\` ${col.def}`);
-                console.log(`✅ [Database] Added missing column '${col.name}' to wh_jamabandi_records`);
+                await pool.execute(`ALTER TABLE wh_old_jamabandi_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_old_jamabandi_records`);
             }
         }
 
         jamabandiTableChecked = true;
-        console.log("✅ [Database] Checked/Migrated 'wh_jamabandi_records' table");
+        console.log("✅ [Database] Checked/Migrated 'wh_old_jamabandi_records' table");
     } catch (err) {
         console.warn("⚠️ [Database] Jamabandi table check warning:", err.message);
     }
 }
 
 /**
- * Inserts structured Rajasthan Jamabandi records into wh_jamabandi_records
+ * Inserts structured Rajasthan Jamabandi records into wh_old_jamabandi_records
  */
 async function insertJamabandiRecord({
     uploadId,
@@ -699,7 +773,7 @@ async function insertJamabandiRecord({
     const khasraArray = Array.isArray(khasraDetails) ? khasraDetails : [];
 
     const insertSql = `
-        INSERT INTO wh_jamabandi_records (
+        INSERT INTO wh_old_jamabandi_records (
             upload_id, form_name, document_type, village, patwar_halka,
             land_inspector_circle, tehsil, district, land_holder, samvat_period,
             area_unit, khata_no_new, khata_no_old, total_khasra_count, total_area,
