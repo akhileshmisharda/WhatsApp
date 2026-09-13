@@ -622,122 +622,118 @@ Strict Rules:
 
     const userPrompt = `Extract this Property Sale Deed document (बैनामा / विक्रय पत्र / रजिस्ट्री) into the following exact JSON schema:
 {
-  "sale_deed": [
+  "extracted_documents": [
     {
-      "extracted_documents": [
-        {
-          "party_type": "property",
-          "document_type": "sale_deed",
-          "sale_deed_data": {
-            "document_type": "Document title or type, e.g., Sale Deed",
-            "deed_number": "Document/Deed registration number",
-            "registration_date": "Date of property registration (DD-MM-YYYY)",
-            "sub_registrar_office": "Name of the Sub-Registrar Office (SRO) where registered",
-            "transaction_type": "Specific type of transaction, e.g., Sale Deed (Female SC/ST/BPL)",
-            "property": {
-              "property_type": "Type of property being transacted, e.g., Agricultural Plot, Residential",
-              "plot_number": "Plot number of the property",
-              "area": {
-                "front": "Front measurement of the plot/property area",
-                "depth": "Depth measurement of the plot/property area",
-                "total_area_sqft": "Total calculated area of the property including units, e.g., '800 varg fit' or '800 sq ft'",
-                "front_accuracy": 100,
-                "depth_accuracy": 100,
-                "total_area_sqft_accuracy": 100
-              },
-              "village": "Village name where the property is located. All Hindi data should be in Hindi only.",
-              "tehsil": "Tehsil name. All Hindi data should be in Hindi only.",
-              "district": "District name. All Hindi data should be in Hindi only.",
-              "khasra_number": "Khasra, Survey, or Aaraji number of the property (e.g., '822').",
-              "rakba": "Agriculture field area details in Bigha and Biswa (e.g., '01 बीघा 11 बिस्वा'). All Hindi data should be in Hindi only.",
-              "boundaries": {
-                "east": "Eastern boundary details. All Hindi data should be in Hindi only.",
-                "west": "Western boundary details. All Hindi data should be in Hindi only.",
-                "north": "Northern boundary details. All Hindi data should be in Hindi only.",
-                "south": "Southern boundary details. All Hindi data should be in Hindi only.",
-                "east_accuracy": 100,
-                "west_accuracy": 100,
-                "north_accuracy": 100,
-                "south_accuracy": 100
-              },
-              "plot_number_accuracy": 100,
-              "village_accuracy": 100,
-              "tehsil_accuracy": 100,
-              "district_accuracy": 100,
-              "khasra_number_accuracy": 100,
-              "rakba_accuracy": 100
-            },
-            "consideration": {
-              "sale_amount": 0,
-              "market_value": 0,
-              "payment_mode": "Mode of payment, e.g., Cheque, Cash, RTGS, DD",
-              "cheque_number": "Reference number of the cheque or transaction",
-              "cheque_date": "Date of the cheque or payment transaction",
-              "sale_amount_accuracy": 100,
-              "market_value_accuracy": 100,
-              "payment_mode_accuracy": 100
-            },
-            "seller": {
-              "seller_name": "Name of the seller. All Hindi data should be in Hindi only.",
-              "seller_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
-              "seller_spouse_name": "Name of the seller's spouse or father. All Hindi data should be in Hindi only.",
-              "seller_age": 0,
-              "seller_address": {
-                "area": "Locality or area of the seller's address. All Hindi data should be in Hindi only.",
-                "seller_city": "City of the seller. All Hindi data should be in Hindi only.",
-                "seller_state": "State of the seller",
-                "seller_pincode": "Postal PIN code of the seller"
-              },
-              "category": "Caste or category of the seller (e.g., General, SC, ST)",
-              "seller_name_accuracy": 100,
-              "seller_relationship_accuracy": 100,
-              "seller_spouse_name_accuracy": 100
-            },
-            "buyer": {
-              "buyer_name": "Name of the buyer. All Hindi data should be in Hindi only.",
-              "buyer_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
-              "buyer_spouse_name": "Name of the buyer's spouse or father. All Hindi data should be in Hindi only.",
-              "buyer_age": 0,
-              "buyer_address": {
-                "village": "Village of the buyer. All Hindi data should be in Hindi only.",
-                "buyer_post": "Post office of the buyer. All Hindi data should be in Hindi only.",
-                "buyer_district": "District of the buyer. All Hindi data should be in Hindi only.",
-                "buyer_state": "State of the buyer",
-                "buyer_pincode": "Postal PIN code of the buyer"
-              },
-              "aadhaar_number": "12-digit format",
-              "category": "Caste or category of the buyer (e.g., Female SC/ST/BPL)",
-              "buyer_name_accuracy": 100,
-              "buyer_relationship_accuracy": 100,
-              "buyer_spouse_name_accuracy": 100
-            },
-            "previous_title": {
-              "previous_owner": "Name of the previous owner of the property",
-              "registry_number": "Registration number of the previous title deed",
-              "registry_date": "Date of the previous title deed registration"
-            },
-            "deed_number_accuracy": 100,
-            "registration_date_accuracy": 100,
-            "sub_registrar_office_accuracy": 100,
-            "transaction_type_accuracy": 100,
-            "sale_deed_data_accuracy": 100
+      "party_type": "property",
+      "document_type": "sale_deed",
+      "sale_deed_data": {
+        "document_type": "Document title or type, e.g., Sale Deed",
+        "deed_number": "Document/Deed registration number",
+        "registration_date": "Date of property registration (DD-MM-YYYY)",
+        "sub_registrar_office": "Name of the Sub-Registrar Office (SRO) where registered",
+        "transaction_type": "Specific type of transaction, e.g., Sale Deed (Female SC/ST/BPL)",
+        "property": {
+          "property_type": "Type of property being transacted, e.g., Agricultural Plot, Residential",
+          "plot_number": "Plot number of the property",
+          "area": {
+            "front": "Front measurement of the plot/property area",
+            "depth": "Depth measurement of the plot/property area",
+            "total_area_sqft": "Total calculated area of the property including units, e.g., '800 varg fit' or '800 sq ft'",
+            "front_accuracy": 100,
+            "depth_accuracy": 100,
+            "total_area_sqft_accuracy": 100
           },
-          "sale_deed_data_accuracy": 100
-        }
-      ],
-      "extraction_result": {
-        "scan_quality_rating": 9,
-        "cross_verification_done": true,
-        "verification_result": "Information verified.",
-        "low_accuracy_reason": "",
-        "advice_rescan": "No",
-        "source_page_number": 1
+          "village": "Village name where the property is located. All Hindi data should be in Hindi only.",
+          "tehsil": "Tehsil name. All Hindi data should be in Hindi only.",
+          "district": "District name. All Hindi data should be in Hindi only.",
+          "khasra_number": "Khasra, Survey, or Aaraji number of the property (e.g., '822').",
+          "rakba": "Agriculture field area details in Bigha and Biswa (e.g., '01 बीघा 11 बिस्वा'). All Hindi data should be in Hindi only.",
+          "boundaries": {
+            "east": "Eastern boundary details. All Hindi data should be in Hindi only.",
+            "west": "Western boundary details. All Hindi data should be in Hindi only.",
+            "north": "Northern boundary details. All Hindi data should be in Hindi only.",
+            "south": "Southern boundary details. All Hindi data should be in Hindi only.",
+            "east_accuracy": 100,
+            "west_accuracy": 100,
+            "north_accuracy": 100,
+            "south_accuracy": 100
+          },
+          "plot_number_accuracy": 100,
+          "village_accuracy": 100,
+          "tehsil_accuracy": 100,
+          "district_accuracy": 100,
+          "khasra_number_accuracy": 100,
+          "rakba_accuracy": 100
+        },
+        "consideration": {
+          "sale_amount": 0,
+          "market_value": 0,
+          "payment_mode": "Mode of payment, e.g., Cheque, Cash, RTGS, DD",
+          "cheque_number": "Reference number of the cheque or transaction",
+          "cheque_date": "Date of the cheque or payment transaction",
+          "sale_amount_accuracy": 100,
+          "market_value_accuracy": 100,
+          "payment_mode_accuracy": 100
+        },
+        "seller": {
+          "seller_name": "Name of the seller. All Hindi data should be in Hindi only.",
+          "seller_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
+          "seller_spouse_name": "Name of the seller's spouse or father. All Hindi data should be in Hindi only.",
+          "seller_age": 0,
+          "seller_address": {
+            "area": "Locality or area of the seller's address. All Hindi data should be in Hindi only.",
+            "seller_city": "City of the seller. All Hindi data should be in Hindi only.",
+            "seller_state": "State of the seller",
+            "seller_pincode": "Postal PIN code of the seller"
+          },
+          "category": "Caste or category of the seller (e.g., General, SC, ST)",
+          "seller_name_accuracy": 100,
+          "seller_relationship_accuracy": 100,
+          "seller_spouse_name_accuracy": 100
+        },
+        "buyer": {
+          "buyer_name": "Name of the buyer. All Hindi data should be in Hindi only.",
+          "buyer_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
+          "buyer_spouse_name": "Name of the buyer's spouse or father. All Hindi data should be in Hindi only.",
+          "buyer_age": 0,
+          "buyer_address": {
+            "village": "Village of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_post": "Post office of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_district": "District of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_state": "State of the buyer",
+            "buyer_pincode": "Postal PIN code of the buyer"
+          },
+          "aadhaar_number": "12-digit format",
+          "category": "Caste or category of the buyer (e.g., Female SC/ST/BPL)",
+          "buyer_name_accuracy": 100,
+          "buyer_relationship_accuracy": 100,
+          "buyer_spouse_name_accuracy": 100
+        },
+        "previous_title": {
+          "previous_owner": "Name of the previous owner of the property",
+          "registry_number": "Registration number of the previous title deed",
+          "registry_date": "Date of the previous title deed registration"
+        },
+        "deed_number_accuracy": 100,
+        "registration_date_accuracy": 100,
+        "sub_registrar_office_accuracy": 100,
+        "transaction_type_accuracy": 100,
+        "sale_deed_data_accuracy": 100
       },
-      "extraction_accuracy": 100,
-      "is_custom": true,
-      "_display_name": "Property Sale Deed"
+      "sale_deed_data_accuracy": 100
     }
-  ]
+  ],
+  "extraction_result": {
+    "scan_quality_rating": 9,
+    "cross_verification_done": true,
+    "verification_result": "Information verified.",
+    "low_accuracy_reason": "",
+    "advice_rescan": "No",
+    "source_page_number": 1
+  },
+  "extraction_accuracy": 100,
+  "is_custom": true,
+  "_display_name": "Property Sale Deed"
 }
 
 Output ONLY raw valid JSON without markdown formatting.`;
