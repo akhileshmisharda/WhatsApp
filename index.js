@@ -29,7 +29,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.1.1-FLASH-LITE-REVISION";
+const APP_VERSION = "v5.1.2-AI-STUDIO-HEADER-FIX";
 
 let sock = null;
 let currentBotNumber = "Unknown";

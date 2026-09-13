@@ -96,10 +96,6 @@ function buildGeminiHeaders(apiKey) {
     };
     if (apiKey) {
         headers['x-goog-api-key'] = apiKey;
-        headers['x-goog-user-project'] = 'pushnotification-e4f9c';
-        if (apiKey.startsWith('ya29.') || apiKey.startsWith('AQ.')) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
-        }
     }
     return headers;
 }
