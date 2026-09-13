@@ -1,3 +1,5 @@
+process.env.TZ = 'Asia/Kolkata';
+
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -29,7 +31,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.2.0-ENTERPRISE-PARSER";
+const APP_VERSION = "v5.2.1-IST-TIMEZONE";
 
 let sock = null;
 let currentBotNumber = "Unknown";
