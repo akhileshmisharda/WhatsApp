@@ -32,7 +32,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.3.3-AADHAAR-TABLE-UPDATE";
+const APP_VERSION = "v5.3.4-ENTERPRISE-SCHEMA-ALIGNMENT";
 
 let sock = null;
 let currentBotNumber = "Unknown";

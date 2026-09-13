@@ -428,51 +428,48 @@ async function insertOrUpdateAadhaar({
         const mergedPincode = payload.pincode || existing.pincode || "";
 
         const finalMergedJsonObj = {
-            "aadhaar_card": [
+            "extracted_documents": [
                 {
-                    "extracted_documents": [
-                        {
-                            "party_type": "buyer",
-                            "document_type": "aadhaar_card",
-                            "aadhaar_card_data": {
-                                "aadhaarNumber": mergedAadhaarNumber || "",
-                                "fullName_English": mergedNameEng,
-                                "fullName_Hindi": mergedNameHin,
-                                "dob": mergedDob,
-                                "gender": mergedGender,
-                                "relation_status": payload.relation_status || existing.relation_status || "",
-                                "fatherName_English": mergedFatherEng,
-                                "fatherName_Hindi": mergedFatherHin,
-                                "husbandName_English": mergedHusbandEng,
-                                "husbandName_Hindi": mergedHusbandHin,
-                                "fullAddress_English": mergedAddressEng,
-                                "fullAddress_Hindi": mergedAddressHin,
-                                "pincode": mergedPincode,
-                                "pancard": "",
-                                "aadhaarNumber_accuracy": 100,
-                                "fullName_English_accuracy": 100,
-                                "fullName_Hindi_accuracy": 100,
-                                "dob_accuracy": 100,
-                                "fatherName_Hindi_accuracy": 100,
-                                "husbandName_Hindi_accuracy": 100,
-                                "pincode_accuracy": 100
-                            },
-                            "aadhaar_card_data_accuracy": 100
-                        }
-                    ],
-                    "extraction_result": {
-                        "scan_quality_rating": 9,
-                        "cross_verification_done": true,
-                        "verification_result": "Information verified across Aadhaar card scans.",
-                        "low_accuracy_reason": "",
-                        "advice_rescan": "No",
-                        "source_page_number": 1
+                    "party_type": "buyer",
+                    "document_type": "aadhaar_card",
+                    "detected_side": "both",
+                    "aadhaar_card_data": {
+                        "aadhaarNumber": mergedAadhaarNumber || "",
+                        "fullName_English": mergedNameEng,
+                        "fullName_Hindi": mergedNameHin,
+                        "dob": mergedDob,
+                        "gender": mergedGender,
+                        "relation_status": payload.relation_status || existing.relation_status || "",
+                        "fatherName_English": mergedFatherEng,
+                        "fatherName_Hindi": mergedFatherHin,
+                        "husbandName_English": mergedHusbandEng,
+                        "husbandName_Hindi": mergedHusbandHin,
+                        "fullAddress_English": mergedAddressEng,
+                        "fullAddress_Hindi": mergedAddressHin,
+                        "pincode": mergedPincode,
+                        "pancard": "",
+                        "aadhaarNumber_accuracy": 100,
+                        "fullName_English_accuracy": 100,
+                        "fullName_Hindi_accuracy": 100,
+                        "dob_accuracy": 100,
+                        "fatherName_Hindi_accuracy": 100,
+                        "husbandName_Hindi_accuracy": 100,
+                        "pincode_accuracy": 100
                     },
-                    "extraction_accuracy": 100,
-                    "is_custom": true,
-                    "_display_name": "Aadhar Card"
+                    "aadhaar_card_data_accuracy": 100
                 }
-            ]
+            ],
+            "extraction_result": {
+                "scan_quality_rating": 9,
+                "cross_verification_done": true,
+                "verification_result": "Information verified across Aadhaar card scans.",
+                "low_accuracy_reason": "",
+                "advice_rescan": "No",
+                "source_page_number": 1
+            },
+            "extraction_accuracy": 100,
+            "is_custom": true,
+            "_display_name": "Aadhar Card"
         };
 
         updateClauses.push('`raw_json` = ?');
