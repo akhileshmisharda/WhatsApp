@@ -345,7 +345,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
     }
 }
 
-    throw new Error('Gemini 3.1 Flash-Lite extraction failed for Aadhaar.');
+    throw new Error('Aadhaar document extraction failed. Please ensure the image or PDF is clear and readable.');
 }
 
 /**
@@ -423,7 +423,7 @@ Output ONLY raw valid JSON without markdown formatting.
         }
     }
 
-    throw new Error('Gemini 3.1 Flash-Lite extraction failed for PAN.');
+    throw new Error('PAN document extraction failed. Please ensure the image or PDF is clear and readable.');
 }
 
 /**
@@ -538,7 +538,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
         const urls = getGeminiUrls(model, apiKey);
         for (const url of urls) {
             try {
-                console.log(`🤖 [Gemini] Attempting Jamabandi extraction with ${model}...`);
+                console.log(`🤖 [AI Engine] Attempting Jamabandi extraction with ${model}...`);
                 const response = await axios.post(url, requestBody, {
                     headers: buildGeminiHeaders(apiKey),
                     timeout: 60000
@@ -579,11 +579,11 @@ Output ONLY raw valid JSON without markdown formatting.`;
                     jData = parsed;
                 }
 
-                console.log(`✅ [Gemini] Successfully extracted Jamabandi using ${model} (Tokens: ${totalTokens})`);
+                console.log(`✅ [AI Engine] Successfully extracted Jamabandi using ${model} (Tokens: ${totalTokens})`);
                 return {
                     success: true,
                     model,
-                    engine: `Gemini (${model})`,
+                    engine: `AI Engine (${model})`,
                     tokens,
                     accuracy: overallAcc,
                     data: jData,
@@ -592,12 +592,12 @@ Output ONLY raw valid JSON without markdown formatting.`;
 
             } catch (err) {
                 lastError = err.response?.data?.error?.message || err.message;
-                console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, lastError);
+                console.warn(`⚠️ [AI Engine ${model}] Jamabandi extraction warning:`, lastError);
             }
         }
     }
 
-    throw new Error(lastError ? `Gemini Error: ${lastError}` : 'All Gemini models failed to extract Jamabandi document.');
+    throw new Error('Jamabandi document extraction failed. Please ensure the image or PDF is clear and readable.');
 }
 
 module.exports = {

@@ -437,10 +437,10 @@ async function insertOrUpdateAadhaar({
         updateParams.push(JSON.stringify(finalMergedJsonObj));
 
         // 12. Accumulate Tokens & Update Accuracy Rating
-        const newTotalPrompt = (existing.tokens_prompt || 0) + payload.tokens_prompt;
-        const newTotalCompletion = (existing.tokens_completion || 0) + payload.tokens_completion;
-        const newTotalTokens = (existing.tokens_total || 0) + payload.tokens_total;
-        const bestOverallAccuracy = Math.max(existing.accuracy_overall || 0, payload.accuracy_overall);
+        const newTotalPrompt = (Number(existing.tokens_prompt) || 0) + (Number(payload.tokens_prompt) || 0);
+        const newTotalCompletion = (Number(existing.tokens_completion) || 0) + (Number(payload.tokens_completion) || 0);
+        const newTotalTokens = (Number(existing.tokens_total) || 0) + (Number(payload.tokens_total) || 0);
+        const bestOverallAccuracy = Math.max(Number(existing.accuracy_overall) || 0, Number(payload.accuracy_overall) || 100);
 
         updateClauses.push('`tokens_prompt` = ?', '`tokens_completion` = ?', '`tokens_total` = ?', '`accuracy_overall` = ?', '`upload_id` = ?');
         updateParams.push(newTotalPrompt, newTotalCompletion, newTotalTokens, bestOverallAccuracy, payload.upload_id || existing.upload_id);
@@ -610,8 +610,51 @@ async function ensureJamabandiTableExists() {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `;
         await pool.execute(createSql);
+
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_jamabandi_records`);
+        const existingCols = cols.map(c => c.Field);
+
+        const requiredCols = [
+            { name: 'upload_id', def: 'INT DEFAULT NULL' },
+            { name: 'form_name', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'document_type', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'village', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'patwar_halka', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'land_inspector_circle', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'tehsil', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'district', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'land_holder', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'samvat_period', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'area_unit', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'khata_no_new', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'khata_no_old', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'total_khasra_count', def: 'INT DEFAULT 0' },
+            { name: 'total_area', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'total_rent', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'khatedar_count', def: 'INT DEFAULT 0' },
+            { name: 'khatedar_details', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'khasra_details', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'raw_json', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'tokens_prompt', def: 'INT DEFAULT 0' },
+            { name: 'tokens_completion', def: 'INT DEFAULT 0' },
+            { name: 'tokens_total', def: 'INT DEFAULT 0' },
+            { name: 'ai_model', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'accuracy_overall', def: 'INT DEFAULT 100' },
+            { name: 'sender_mobile', def: "VARCHAR(25) NOT NULL DEFAULT 'Unknown'" },
+            { name: 'receiver_mobile', def: "VARCHAR(25) NOT NULL DEFAULT 'Unknown'" },
+            { name: 'document_uri', def: 'VARCHAR(500) DEFAULT NULL' },
+            { name: 'mime_type', def: "VARCHAR(50) DEFAULT 'image/jpeg'" }
+        ];
+
+        for (const col of requiredCols) {
+            if (!existingCols.includes(col.name)) {
+                await pool.execute(`ALTER TABLE wh_jamabandi_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_jamabandi_records`);
+            }
+        }
+
         jamabandiTableChecked = true;
-        console.log("✅ [Database] Checked/Created 'wh_jamabandi_records' table");
+        console.log("✅ [Database] Checked/Migrated 'wh_jamabandi_records' table");
     } catch (err) {
         console.warn("⚠️ [Database] Jamabandi table check warning:", err.message);
     }

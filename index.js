@@ -29,7 +29,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.1.2-AI-STUDIO-HEADER-FIX";
+const APP_VERSION = "v5.2.0-ENTERPRISE-PARSER";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -119,23 +119,49 @@ app.listen(PORT, '0.0.0.0', () => {
 async function getActualPhoneNumber(senderJid, msg) {
     if (!senderJid) return "Unknown";
     
+    if (senderJid.endsWith('@s.whatsapp.net')) {
+        return senderJid.split('@')[0].replace(/[^0-9]/g, "");
+    }
+
     if (senderJid.endsWith('@lid')) {
         const lidId = senderJid.split('@')[0];
         try {
-            const contextInfo = msg?.message?.extendedTextMessage?.contextInfo || 
-                                msg?.message?.imageMessage?.contextInfo ||
-                                msg?.message?.documentMessage?.contextInfo;
+            const content = msg?.message;
+            const contextInfo = content?.extendedTextMessage?.contextInfo || 
+                                content?.imageMessage?.contextInfo ||
+                                content?.documentMessage?.contextInfo ||
+                                content?.videoMessage?.contextInfo;
             if (contextInfo?.participant && contextInfo.participant.endsWith('@s.whatsapp.net')) {
-                return contextInfo.participant.split('@')[0].replace(/[^0-9]/g, "");
+                const num = contextInfo.participant.split('@')[0].replace(/[^0-9]/g, "");
+                if (num && num.length >= 10 && num.length <= 15) return num;
+            }
+
+            if (msg?.key?.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
+                const num = msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, "");
+                if (num && num.length >= 10 && num.length <= 15) return num;
+            }
+
+            if (msg?.key?.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
+                const num = msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
+                if (num && num.length >= 10 && num.length <= 15) return num;
             }
 
             const [rows] = await pool.execute(
-                `SELECT value FROM wh_baileys_auth WHERE id LIKE 'contacts-%' OR id LIKE 'app-state-sync-%'`
+                `SELECT value FROM wh_baileys_auth WHERE id LIKE 'contacts-%' OR id LIKE 'app-state-sync-%' OR id LIKE 'lid-mapping-%' OR id LIKE 'session-%' OR id LIKE 'user-%'`
             );
             for (const r of rows) {
-                if (r.value && typeof r.value === 'string' && r.value.includes(lidId)) {
-                    const clean = String(r.value).replace(/[^0-9]/g, "");
-                    if (clean.length >= 10 && clean.length <= 13) return clean;
+                if (r.value) {
+                    const strVal = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    if (strVal.includes(lidId)) {
+                        const jidMatch = strVal.match(/(\d{10,14})@s\.whatsapp\.net/);
+                        if (jidMatch && jidMatch[1]) {
+                            return jidMatch[1];
+                        }
+                        const phoneMatch = strVal.match(/\b(91\d{10}|\d{10})\b/);
+                        if (phoneMatch && phoneMatch[1]) {
+                            return phoneMatch[1];
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -145,6 +171,25 @@ async function getActualPhoneNumber(senderJid, msg) {
     }
 
     return senderJid.split('@')[0].replace(/[^0-9]/g, "");
+}
+
+function sanitizeUserFacingError(err) {
+    const raw = err?.message || String(err || '');
+    if (
+        raw.includes('Gemini') || 
+        raw.includes('Google') || 
+        raw.includes('Flash') || 
+        raw.includes('OAuth') || 
+        raw.includes('API key') ||
+        raw.includes('credentials') ||
+        raw.includes('quota') ||
+        raw.includes('generateContent') ||
+        raw.includes('JSON') ||
+        raw.includes('failed to extract')
+    ) {
+        return "Could not extract document details. Please ensure the document is clear and readable, and try again.";
+    }
+    return raw.length > 100 ? "Document processing failed. Please try again." : raw;
 }
 
 function getMessageDetails(msg) {
@@ -517,10 +562,11 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
 
         const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side' : 'Front Side');
         const actionLabel = dbResult?.action === 'updated' ? ' (Merged with Existing Record)' : '';
+        const recordId = dbResult?.recordId || uploadId;
 
         const replyText = 
             `*AADHAAR EXTRACTED & SAVED*${actionLabel}\n\n` +
-            `*Upload ID:* #${uploadId}\n` +
+            `*Record ID:* #${recordId}\n` +
             `*Document Scan:* ${sideLabel}\n` +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Name (English):* ${displayVal(bName.english)}\n` +
@@ -536,12 +582,13 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
             `Powered by FabKraft AI`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
-        logEvent("AADHAAR_SUCCESS", `Aadhaar processed with ID #${uploadId} for ${senderMobile}`);
+        logEvent("AADHAAR_SUCCESS", `Aadhaar processed with Record ID #${recordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        const userMsg = sanitizeUserFacingError(err);
         await sock.sendMessage(replyJid, {
-            text: `Processing Failed: ${err.message}. Please try again.`
+            text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
 }
@@ -591,8 +638,9 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
         });
 
         // 3. Upsert into wh_pan_records
+        let panResult = null;
         if (details.panNumber && details.panNumber !== "Not Found") {
-            await insertOrUpdatePan({
+            panResult = await insertOrUpdatePan({
                 uploadId,
                 panNumber: details.panNumber,
                 name: details.name,
@@ -605,10 +653,11 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
         }
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+        const panRecordId = panResult?.recordId || uploadId;
 
         const replyText = 
             `*PAN CARD EXTRACTED & SAVED*\n\n` +
-            `*Upload ID:* #${uploadId}\n` +
+            `*Record ID:* #${panRecordId}\n` +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Name:* ${displayVal(details.name)}\n` +
             `*Father's Name:* ${displayVal(details.fatherName)}\n` +
@@ -617,12 +666,13 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
             `Powered by FabKraft AI`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
-        logEvent("PAN_SUCCESS", `PAN processed with ID #${uploadId} for ${senderMobile}`);
+        logEvent("PAN_SUCCESS", `PAN processed with Record ID #${panRecordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        const userMsg = sanitizeUserFacingError(err);
         await sock.sendMessage(replyJid, {
-            text: `Processing Failed: ${err.message}. Please try again.`
+            text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
 }
@@ -676,7 +726,7 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
         });
 
         // 3. Insert record into wh_jamabandi_records
-        await insertJamabandiRecord({
+        const jbResult = await insertJamabandiRecord({
             uploadId,
             formName: details.formName,
             documentType: details.documentType,
@@ -708,6 +758,7 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
         });
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+        const jamabandiRecordId = jbResult?.recordId || uploadId;
 
         const khatedars = Array.isArray(details.khatedarDetails) ? details.khatedarDetails : [];
         const khasras = Array.isArray(details.khasraDetails) ? details.khasraDetails : [];
@@ -719,7 +770,7 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
 
         const replyText = 
             `*JAMABANDI EXTRACTED & SAVED*\n\n` +
-            `*Upload ID:* #${uploadId}\n` +
+            `*Record ID:* #${jamabandiRecordId}\n` +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Village (ग्राम):* ${displayVal(details.village)}\n` +
             `*Patwar Halka:* ${displayVal(details.patwarHalka)}\n` +
@@ -733,12 +784,13 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
             `Powered by FabKraft AI`;
 
         await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
-        logEvent("JAMABANDI_SUCCESS", `Jamabandi processed with ID #${uploadId} for ${senderMobile}`);
+        logEvent("JAMABANDI_SUCCESS", `Jamabandi processed with Record ID #${jamabandiRecordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("JAMABANDI_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        const userMsg = sanitizeUserFacingError(err);
         await sock.sendMessage(replyJid, {
-            text: `Processing Failed: ${err.message}. Please try again.`
+            text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
 }
