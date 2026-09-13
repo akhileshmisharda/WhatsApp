@@ -6,6 +6,7 @@ dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
 const path = require('path');
 const P = require('pino');
+const QRCode = require('qrcode');
 const qrcode = require('qrcode-terminal');
 
 const {
@@ -38,7 +39,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.0-MULTI-BOT-ACCESS-CONTROL";
+const APP_VERSION = "v5.4.1-SERVER-QR-RENDER";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -170,8 +171,27 @@ app.get('/', async (req, res) => {
     res.send(html);
 });
 
+// Direct PNG QR Image endpoint
+app.get('/qr-img/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const sessionInfo = botSockets.get(sessionId);
+
+    if (!sessionInfo || !sessionInfo.qr) {
+        return res.status(404).send('QR Code not available or session not active');
+    }
+
+    try {
+        const buffer = await QRCode.toBuffer(sessionInfo.qr, { width: 320, margin: 2 });
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        return res.send(buffer);
+    } catch (err) {
+        return res.status(500).send('Error generating QR image');
+    }
+});
+
 // Browser QR Code Display for a specific Bot Session
-app.get('/qr/:sessionId', (req, res) => {
+app.get('/qr/:sessionId', async (req, res) => {
     const sessionId = req.params.sessionId;
     const sessionInfo = botSockets.get(sessionId);
 
@@ -183,6 +203,16 @@ app.get('/qr/:sessionId', (req, res) => {
     const status = sessionInfo.connectionStatus;
     const botName = sessionInfo.botConfig?.bot_name || sessionId;
 
+    let qrImageTag = '';
+    if (qrRaw) {
+        try {
+            const dataUrl = await QRCode.toDataURL(qrRaw, { width: 300, margin: 2 });
+            qrImageTag = `<img src="${dataUrl}" alt="Scan QR Code" style="width: 280px; height: 280px; border-radius: 12px; display: block; margin: 15px auto; background: white; padding: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.2);" />`;
+        } catch (e) {
+            qrImageTag = `<img src="/qr-img/${sessionId}?t=${Date.now()}" alt="Scan QR Code" style="width: 280px; height: 280px; border-radius: 12px; display: block; margin: 15px auto; background: white; padding: 10px;" />`;
+        }
+    }
+
     const html = `
         <!DOCTYPE html>
         <html lang="en">
@@ -190,12 +220,10 @@ app.get('/qr/:sessionId', (req, res) => {
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Scan QR - ${botName}</title>
-            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
             <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-                .card { background: #1e293b; border-radius: 16px; padding: 32px; text-align: center; max-width: 420px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-                h2 { margin-top: 0; color: #38bdf8; }
-                #qrCanvas { background: white; padding: 16px; border-radius: 12px; margin: 20px auto; display: block; }
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+                .card { background: #1e293b; border-radius: 16px; padding: 32px; text-align: center; max-width: 420px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+                h2 { margin-top: 0; color: #38bdf8; font-size: 22px; }
                 .status { margin-top: 15px; font-size: 14px; color: #94a3b8; }
                 .btn { display: inline-block; background: #38bdf8; color: #0f172a; font-weight: bold; padding: 10px 20px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
             </style>
@@ -203,29 +231,24 @@ app.get('/qr/:sessionId', (req, res) => {
         <body>
             <div class="card">
                 <h2>📲 ${botName}</h2>
-                <p style="color: #94a3b8; font-size: 14px;">Session: <code>${sessionId}</code></p>
+                <p style="color: #94a3b8; font-size: 13px;">Session: <code>${sessionId}</code></p>
 
                 ${status === 'connected' ? `
-                    <div style="padding: 40px 20px;">
-                        <div style="font-size: 50px;">✅</div>
-                        <h3 style="color: #4ade80;">Bot is Connected!</h3>
-                        <p style="color: #94a3b8;">Phone: +${sessionInfo.currentBotNumber || 'Connected'}</p>
+                    <div style="padding: 30px 10px;">
+                        <div style="font-size: 56px;">✅</div>
+                        <h3 style="color: #4ade80; margin-top: 10px;">Bot is Connected!</h3>
+                        <p style="color: #94a3b8;">Phone: +${sessionInfo.currentBotNumber || 'Active'}</p>
                     </div>
                 ` : (qrRaw ? `
-                    <canvas id="qrCanvas"></canvas>
-                    <script>
-                        QRCode.toCanvas(document.getElementById('qrCanvas'), "${qrRaw}", { width: 280 }, function (error) {
-                            if (error) console.error(error);
-                        });
-                    </script>
-                    <div class="status">Scan this QR Code in WhatsApp on your phone.<br>Auto-refreshing in 15s...</div>
+                    ${qrImageTag}
+                    <div class="status">Open <strong>WhatsApp &gt; Linked Devices &gt; Link a Device</strong> and scan this code.<br><small style="color: #64748b;">Auto-refreshing in 15s...</small></div>
                     <script>setTimeout(() => location.reload(), 15000);</script>
                 ` : `
-                    <div style="padding: 40px 20px;">
-                        <div style="font-size: 40px;">⏳</div>
-                        <p>Generating QR Code... Status: <strong>${status}</strong></p>
+                    <div style="padding: 40px 10px;">
+                        <div style="font-size: 44px;">⏳</div>
+                        <p style="margin-top: 15px; color: #cbd5e1;">Generating QR Code... Status: <strong>${status}</strong></p>
                     </div>
-                    <script>setTimeout(() => location.reload(), 4000);</script>
+                    <script>setTimeout(() => location.reload(), 3000);</script>
                 `)}
 
                 <div>
