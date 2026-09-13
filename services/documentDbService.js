@@ -1323,7 +1323,14 @@ async function isSenderAllowed(senderMobile, sessionId = 'all') {
         };
     }
 
-    if (match.bot_session_id && match.bot_session_id !== 'all' && sessionId !== 'all' && match.bot_session_id !== sessionId) {
+    const isSessionMatch = !match.bot_session_id || 
+                           match.bot_session_id === 'all' || 
+                           sessionId === 'all' || 
+                           match.bot_session_id === sessionId ||
+                           sessionId.includes(match.bot_session_id) ||
+                           match.bot_session_id.includes(sessionId);
+
+    if (!isSessionMatch) {
         return {
             allowed: false,
             user: match,

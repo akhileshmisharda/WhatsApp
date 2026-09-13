@@ -39,7 +39,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.6-CUSTOM-MENU-ATTENDANCE-SITE";
+const APP_VERSION = "v5.4.7-FIX-SECONDARY-BOT-TRIGGER";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -597,32 +597,69 @@ async function startBotSession(botConfig) {
                     ? msg.messageTimestamp 
                     : (msg.messageTimestamp?.low || 0);
 
-                if (msgTimestamp && msgTimestamp < (nowSeconds - 10)) {
+                // Ignore messages older than 5 minutes (prevents reprocessing old backlog on startup)
+                if (msgTimestamp && msgTimestamp < (nowSeconds - 300)) {
                     continue;
                 }
 
                 const { text, isMedia, isImage, isPdf, mimeType, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
 
-                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *') || text.startsWith('🪪 *') || text.startsWith('💳 *') || text.startsWith('⚠️ *')) {
+                // Prevent automated loopback replies from the bot itself
+                if (
+                    text.startsWith('✅') || text.startsWith('⏳') || text.startsWith('👋') || 
+                    text.startsWith('🤖') || text.startsWith('❌') || text.startsWith('🪪') || 
+                    text.startsWith('💳') || text.startsWith('⚠️') || text.startsWith('📊') || 
+                    text.startsWith('📋') || text.startsWith('📸') || text.startsWith('ℹ️') ||
+                    text.startsWith('*Welcome') || text.startsWith('Welcome')
+                ) {
+                    continue;
+                }
+
+                const currentBotNum = sessionState.currentBotNumber || botConfig.phone_number || '';
+
+                // If user is sending a message from the bot's phone to a DIFFERENT contact (regular outgoing chat), ignore it
+                const isSelfChat = senderJid.includes(currentBotNum) || 
+                                   (sock.user?.id && senderJid.split('@')[0].includes(sock.user.id.split(':')[0].replace(/[^0-9]/g, "")));
+                if (msg.key.fromMe && !isSelfChat) {
                     continue;
                 }
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg, sessionState);
+
+                // Clean reply JID (resolve LID to standard whatsapp jid if needed)
+                let replyJid = senderJid;
+                if (senderJid.endsWith('@lid') && senderMobile && senderMobile !== 'Unknown' && /^\d{10,14}$/.test(senderMobile)) {
+                    const formattedPhone = senderMobile.length === 10 ? `91${senderMobile}` : senderMobile;
+                    replyJid = `${formattedPhone}@s.whatsapp.net`;
+                }
 
                 // Command Triggers:
                 const isAadhaarTag = /^(a|aadhar|adhar|aadhaar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
                 const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
                 const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
                 const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
-                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
-                const isCustomMenuBot = botConfig.menu_type === 'CUSTOM_MENU' || (botConfig.phone_number && botConfig.phone_number.includes('9079377715')) || sessionId.includes('9079377715');
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start|namaste|hlo|helo)[\s!.,?]*$/i.test(captionText) || 
+                                        captionText === 'menu' || 
+                                        captionText === 'hi' ||
+                                        captionText === 'help' ||
+                                        captionText === 'start';
+
+                const isCustomMenuBot = botConfig.menu_type === 'CUSTOM_MENU' || 
+                                        currentBotNum.includes('9079377715') || 
+                                        sessionId.includes('9079377715') || 
+                                        (botConfig.phone_number && botConfig.phone_number.includes('9079377715'));
+
                 const isCustomMenuTag = isCustomMenuBot && (
-                    /^(hi|hello|hey|menu|help|start|1|2|3)$/i.test(captionText) ||
+                    isExactGreeting ||
+                    /^(1|2|3)$/.test(captionText) ||
                     captionText.startsWith('attandance') ||
                     captionText.startsWith('attendance') ||
                     captionText.startsWith('site') ||
-                    ((captionText.includes('site') || captionText.includes('attandance') || captionText.includes('attendance')) && isMedia)
+                    captionText.includes('attandance') ||
+                    captionText.includes('attendance') ||
+                    captionText.includes('site images') ||
+                    isMedia
                 );
 
                 // Determine if this incoming message is an intentional bot command/trigger
@@ -653,7 +690,7 @@ async function startBotSession(botConfig) {
                 const authCheck = await isSenderAllowed(senderMobile, sessionId);
                 if (!authCheck.allowed) {
                     logEvent("ACCESS_DENIED", `Blocked unauthorized trigger from ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
-                    await sock.sendMessage(senderJid, {
+                    await sock.sendMessage(replyJid, {
                         text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
                     }, { quoted: msg });
                     continue;
@@ -685,7 +722,7 @@ async function startBotSession(botConfig) {
                         botConfig,
                         msg: targetMsgObj,
                         senderMobile,
-                        replyJid: senderJid,
+                        replyJid,
                         textMessage: text,
                         quotedRef,
                         isMedia,
@@ -697,12 +734,12 @@ async function startBotSession(botConfig) {
                 // DOCUMENT_OCR Flow:
                 if (isExactGreeting && !isMedia) {
                     logEvent("MENU_REPLY", `Sending OCR menu to ${senderMobile}`);
-                    await sendMenuResponse(sock, senderJid, msg, sessionState.currentBotNumber);
+                    await sendMenuResponse(sock, replyJid, msg, sessionState.currentBotNumber);
                     continue;
                 }
 
                 if (isAadhaarTag) {
-                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleAadhaarGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isPanTag) {
                     await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isJamabandiTag) {
