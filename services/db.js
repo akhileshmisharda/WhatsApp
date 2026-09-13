@@ -18,6 +18,21 @@ const pool = mysql.createPool({
     connectTimeout: 30000
 });
 
+// Enforce session timezone to Indian Standard Time (+05:30) on every new connection
+if (pool.pool && typeof pool.pool.on === 'function') {
+    pool.pool.on('connection', (connection) => {
+        connection.query("SET time_zone = '+05:30'", (err) => {
+            if (err) console.warn("⚠️ [Database] Connection timezone set warning:", err.message);
+        });
+    });
+} else if (typeof pool.on === 'function') {
+    pool.on('connection', (connection) => {
+        connection.query("SET time_zone = '+05:30'", (err) => {
+            if (err) console.warn("⚠️ [Database] Connection timezone set warning:", err.message);
+        });
+    });
+}
+
 // Enforce session timezone to Indian Standard Time (+05:30)
 (async () => {
     try {

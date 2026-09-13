@@ -1355,12 +1355,10 @@ async function updateBotStatus(sessionId, { status, phoneNumber, lastConnectedAt
             params.push(phoneNumber);
         }
         if (lastConnectedAt !== undefined) {
-            updates.push('`last_connected_at` = ?');
-            params.push(lastConnectedAt ? new Date(lastConnectedAt) : new Date());
+            updates.push('`last_connected_at` = NOW()');
         }
         if (lastQrAt !== undefined) {
-            updates.push('`last_qr_at` = ?');
-            params.push(lastQrAt ? new Date(lastQrAt) : new Date());
+            updates.push('`last_qr_at` = NOW()');
         }
 
         if (updates.length === 0) return;
