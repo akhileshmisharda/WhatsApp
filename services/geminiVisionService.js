@@ -81,11 +81,13 @@ async function getGeminiApiKey() {
     return cachedGeminiKey || process.env.GEMINI_API_KEY || '';
 }
 
-function getGeminiUrl(model, apiKey) {
-    if (apiKey && apiKey.startsWith('AIzaSy')) {
-        return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    }
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+function getGeminiUrls(model, apiKey) {
+    const encodedKey = encodeURIComponent(apiKey);
+    return [
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodedKey}`,
+        `https://generativelanguage.googleapis.com/v1alpha/models/${model}:generateContent?key=${encodedKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${encodedKey}`
+    ];
 }
 
 function buildGeminiHeaders(apiKey) {
@@ -93,19 +95,22 @@ function buildGeminiHeaders(apiKey) {
         'Content-Type': 'application/json'
     };
     if (apiKey) {
-        if (apiKey.startsWith('AIzaSy')) {
-            headers['x-goog-api-key'] = apiKey;
-        } else {
+        headers['x-goog-api-key'] = apiKey;
+        headers['x-goog-user-project'] = 'pushnotification-e4f9c';
+        if (apiKey.startsWith('ya29.') || apiKey.startsWith('AQ.')) {
             headers['Authorization'] = `Bearer ${apiKey}`;
         }
     }
     return headers;
 }
 
-// Exclusive Gemini 3.1 Flash-Lite Engine
+// Model priority with Gemini 3.1 Flash-Lite at top
 const MODELS = [
     'gemini-3.1-flash-lite',
-    'gemini-3.1-flash'
+    'gemini-3.1-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
 ];
 
 /**
@@ -214,14 +219,14 @@ Output ONLY raw valid JSON without markdown formatting.`;
         }
     };
 
-    // 1. Try Gemini models
     for (const model of MODELS) {
-        try {
-            const url = getGeminiUrl(model, apiKey);
-            const response = await axios.post(url, requestBody, {
-                headers: buildGeminiHeaders(apiKey),
-                timeout: 30000
-            });
+        const urls = getGeminiUrls(model, apiKey);
+        for (const url of urls) {
+            try {
+                const response = await axios.post(url, requestBody, {
+                    headers: buildGeminiHeaders(apiKey),
+                    timeout: 35000
+                });
 
             const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
             
@@ -342,6 +347,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
             console.warn(`⚠️ [Gemini ${model}] Error:`, err.response?.data?.error?.message || err.message);
         }
     }
+}
 
     throw new Error('Gemini 3.1 Flash-Lite extraction failed for Aadhaar.');
 }
@@ -391,32 +397,33 @@ Output ONLY raw valid JSON without markdown formatting.
         }
     };
 
-    // 1. Try Gemini models
     for (const model of MODELS) {
-        try {
-            const url = getGeminiUrl(model, apiKey);
-            const response = await axios.post(url, requestBody, {
-                headers: buildGeminiHeaders(apiKey),
-                timeout: 15000
-            });
+        const urls = getGeminiUrls(model, apiKey);
+        for (const url of urls) {
+            try {
+                const response = await axios.post(url, requestBody, {
+                    headers: buildGeminiHeaders(apiKey),
+                    timeout: 20000
+                });
 
-            const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-            const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
-            const parsed = JSON.parse(cleaned);
+                const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+                const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+                const parsed = JSON.parse(cleaned);
 
-            console.log(`✅ [Gemini] Successfully extracted PAN using ${model}`);
-            return {
-                success: true,
-                engine: `Gemini (${model})`,
-                data: {
-                    panNumber: parsed.pan_number || "Not Found",
-                    name: parsed.name || "Not Found",
-                    fatherName: parsed.father_name || "Not Found",
-                    dob: parsed.dob || "Not Found"
-                }
-            };
-        } catch (err) {
-            console.warn(`⚠️ [Gemini ${model}] Error:`, err.response?.data?.error?.message || err.message);
+                console.log(`✅ [Gemini] Successfully extracted PAN using ${model}`);
+                return {
+                    success: true,
+                    engine: `Gemini (${model})`,
+                    data: {
+                        panNumber: parsed.pan_number || "Not Found",
+                        name: parsed.name || "Not Found",
+                        fatherName: parsed.father_name || "Not Found",
+                        dob: parsed.dob || "Not Found"
+                    }
+                };
+            } catch (err) {
+                console.warn(`⚠️ [Gemini ${model}] Error:`, err.response?.data?.error?.message || err.message);
+            }
         }
     }
 
@@ -532,63 +539,65 @@ Output ONLY raw valid JSON without markdown formatting.`;
     let lastError = null;
 
     for (const model of MODELS) {
-        try {
-            console.log(`🤖 [Gemini] Attempting Jamabandi extraction with ${model} (Mime: ${actualMime})...`);
-            const url = getGeminiUrl(model, apiKey);
-            const response = await axios.post(url, requestBody, {
-                headers: buildGeminiHeaders(apiKey),
-                timeout: 60000
-            });
-
-            const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-            
-            const rawUsage = response.data?.usageMetadata || response.data?.usage || {};
-            const promptTokens = Number(rawUsage.promptTokenCount ?? rawUsage.prompt_token_count ?? 0);
-            const candidatesTokens = Number(rawUsage.candidatesTokenCount ?? rawUsage.candidates_token_count ?? 0);
-            const totalTokens = Number(rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? (promptTokens + candidatesTokens));
-
-            const tokens = { promptTokens, candidatesTokens, totalTokens };
-            
-            let parsed = null;
+        const urls = getGeminiUrls(model, apiKey);
+        for (const url of urls) {
             try {
-                const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
-                parsed = JSON.parse(cleaned);
-            } catch (jsonErr) {
-                const match = textResponse.match(/\{[\s\S]*\}/);
-                if (match) {
-                    parsed = JSON.parse(match[0]);
-                } else {
-                    throw new Error(`Failed to parse JSON response: ${jsonErr.message}`);
+                console.log(`🤖 [Gemini] Attempting Jamabandi extraction with ${model}...`);
+                const response = await axios.post(url, requestBody, {
+                    headers: buildGeminiHeaders(apiKey),
+                    timeout: 60000
+                });
+
+                const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+                
+                const rawUsage = response.data?.usageMetadata || response.data?.usage || {};
+                const promptTokens = Number(rawUsage.promptTokenCount ?? rawUsage.prompt_token_count ?? 0);
+                const candidatesTokens = Number(rawUsage.candidatesTokenCount ?? rawUsage.candidates_token_count ?? 0);
+                const totalTokens = Number(rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? (promptTokens + candidatesTokens));
+
+                const tokens = { promptTokens, candidatesTokens, totalTokens };
+                
+                let parsed = null;
+                try {
+                    const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+                    parsed = JSON.parse(cleaned);
+                } catch (jsonErr) {
+                    const match = textResponse.match(/\{[\s\S]*\}/);
+                    if (match) {
+                        parsed = JSON.parse(match[0]);
+                    } else {
+                        throw new Error(`Failed to parse JSON response: ${jsonErr.message}`);
+                    }
                 }
+
+                let jData = null;
+                let overallAcc = parsed.accuracy_overall || 100;
+
+                const docList = parsed.extracted_documents || [];
+                if (Array.isArray(docList) && docList.length > 0) {
+                    const item = docList.find(d => d.document_type === 'old_jamabandi' || d.old_jamabandi_data) || docList[0];
+                    jData = item.old_jamabandi_data || item;
+                } else if (parsed.old_jamabandi_data) {
+                    jData = parsed.old_jamabandi_data;
+                } else {
+                    jData = parsed;
+                }
+
+                console.log(`✅ [Gemini] Successfully extracted Jamabandi using ${model} (Tokens: ${totalTokens})`);
+                return {
+                    success: true,
+                    model,
+                    engine: `Gemini (${model})`,
+                    tokens,
+                    accuracy: overallAcc,
+                    data: jData,
+                    rawJson: parsed
+                };
+
+            } catch (err) {
+                lastError = err.response?.data?.error?.message || err.message;
+                console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, lastError);
             }
-
-            let jData = null;
-            let overallAcc = parsed.accuracy_overall || 100;
-
-            const docList = parsed.extracted_documents || [];
-            if (Array.isArray(docList) && docList.length > 0) {
-                const item = docList.find(d => d.document_type === 'old_jamabandi' || d.old_jamabandi_data) || docList[0];
-                jData = item.old_jamabandi_data || item;
-            } else if (parsed.old_jamabandi_data) {
-                jData = parsed.old_jamabandi_data;
-            } else {
-                jData = parsed;
-            }
-
-            console.log(`✅ [Gemini] Successfully extracted Jamabandi using ${model} (Tokens: ${totalTokens})`);
-            return {
-                success: true,
-                model,
-                engine: `Gemini (${model})`,
-                tokens,
-                accuracy: overallAcc,
-                data: jData,
-                rawJson: parsed
-            };
-
-        } catch (err) {
-            lastError = err.response?.data?.error?.message || err.message;
-            console.warn(`⚠️ [Gemini ${model}] Jamabandi extraction warning:`, lastError);
         }
     }
 
