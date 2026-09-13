@@ -39,7 +39,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.1-SERVER-QR-RENDER";
+const APP_VERSION = "v5.4.2-LID-ACCESS-FIX";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -314,51 +314,67 @@ app.listen(PORT, '0.0.0.0', () => {
 // ---------------------------------------------------------
 // 3. UTILITIES & MESSAGE PARSING
 // ---------------------------------------------------------
-async function getActualPhoneNumber(senderJid, msg) {
+async function getActualPhoneNumber(senderJid, msg, sessionState = null) {
     if (!senderJid) return "Unknown";
+
+    // 1. If message was sent from the bot's own connected device (e.g. self-testing / linked device)
+    if (msg?.key?.fromMe) {
+        if (sessionState?.currentBotNumber && sessionState.currentBotNumber !== "Unknown") {
+            return sessionState.currentBotNumber;
+        }
+        if (sessionState?.botConfig?.phone_number) {
+            return sessionState.botConfig.phone_number.replace(/[^0-9]/g, "");
+        }
+    }
     
+    // 2. Direct WhatsApp mobile JID (e.g., 919079377715@s.whatsapp.net)
     if (senderJid.endsWith('@s.whatsapp.net')) {
         return senderJid.split('@')[0].replace(/[^0-9]/g, "");
     }
 
+    // 3. Baileys v7+ direct participant identity fields
+    if (msg?.key?.participantPn && msg.key.participantPn.endsWith('@s.whatsapp.net')) {
+        return msg.key.participantPn.split('@')[0].replace(/[^0-9]/g, "");
+    }
+    if (msg?.key?.remoteJidPn && msg.key.remoteJidPn.endsWith('@s.whatsapp.net')) {
+        return msg.key.remoteJidPn.split('@')[0].replace(/[^0-9]/g, "");
+    }
+    if (msg?.key?.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
+        return msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
+    }
+    if (msg?.key?.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
+        return msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, "");
+    }
+
+    // 4. Context info participant
+    const content = msg?.message;
+    const contextInfo = content?.extendedTextMessage?.contextInfo || 
+                        content?.imageMessage?.contextInfo ||
+                        content?.documentMessage?.contextInfo ||
+                        content?.videoMessage?.contextInfo;
+    if (contextInfo?.participant && contextInfo.participant.endsWith('@s.whatsapp.net')) {
+        const num = contextInfo.participant.split('@')[0].replace(/[^0-9]/g, "");
+        if (num && num.length >= 10 && num.length <= 15) return num;
+    }
+
+    // 5. WhatsApp LID Resolution via MySQL lookup
     if (senderJid.endsWith('@lid')) {
         const lidId = senderJid.split('@')[0];
         try {
-            const content = msg?.message;
-            const contextInfo = content?.extendedTextMessage?.contextInfo || 
-                                content?.imageMessage?.contextInfo ||
-                                content?.documentMessage?.contextInfo ||
-                                content?.videoMessage?.contextInfo;
-            if (contextInfo?.participant && contextInfo.participant.endsWith('@s.whatsapp.net')) {
-                const num = contextInfo.participant.split('@')[0].replace(/[^0-9]/g, "");
-                if (num && num.length >= 10 && num.length <= 15) return num;
-            }
-
-            if (msg?.key?.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
-                const num = msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, "");
-                if (num && num.length >= 10 && num.length <= 15) return num;
-            }
-
-            if (msg?.key?.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
-                const num = msg.key.participant.split('@')[0].replace(/[^0-9]/g, "");
-                if (num && num.length >= 10 && num.length <= 15) return num;
-            }
-
             const [rows] = await pool.execute(
-                `SELECT value FROM wh_baileys_auth WHERE id LIKE 'contacts-%' OR id LIKE 'app-state-sync-%' OR id LIKE 'lid-mapping-%' OR id LIKE 'session-%' OR id LIKE 'user-%'`
+                `SELECT value FROM wh_baileys_auth WHERE value LIKE ? LIMIT 10`,
+                [`%${lidId}%`]
             );
             for (const r of rows) {
                 if (r.value) {
                     const strVal = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
-                    if (strVal.includes(lidId)) {
-                        const jidMatch = strVal.match(/(\d{10,14})@s\.whatsapp\.net/);
-                        if (jidMatch && jidMatch[1]) {
-                            return jidMatch[1];
-                        }
-                        const phoneMatch = strVal.match(/\b(91\d{10}|\d{10})\b/);
-                        if (phoneMatch && phoneMatch[1]) {
-                            return phoneMatch[1];
-                        }
+                    const jidMatch = strVal.match(/(\d{10,14})@s\.whatsapp\.net/);
+                    if (jidMatch && jidMatch[1]) {
+                        return jidMatch[1];
+                    }
+                    const phoneMatch = strVal.match(/\b(91\d{10}|\d{10})\b/);
+                    if (phoneMatch && phoneMatch[1]) {
+                        return phoneMatch[1];
                     }
                 }
             }
@@ -592,7 +608,7 @@ async function startBotSession(botConfig) {
                     continue;
                 }
 
-                const senderMobile = await getActualPhoneNumber(senderJid, msg);
+                const senderMobile = await getActualPhoneNumber(senderJid, msg, sessionState);
 
                 // ---------------------------------------------------------
                 // ACCESS CONTROL LAYER (WH_ALLOWED_USERS WHITELIST CHECK)

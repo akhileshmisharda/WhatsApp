@@ -1205,6 +1205,10 @@ function getPhoneVariants(phone) {
 async function isSenderAllowed(senderMobile, sessionId = 'all') {
     await ensureBotManagementTablesExist();
 
+    if (!senderMobile || senderMobile === "Unknown") {
+        return { allowed: false, user: null, reason: "Could not resolve sender mobile number." };
+    }
+
     const now = Date.now();
     if (!allowedUsersCache || (now - lastAllowedUsersFetch > ALLOWED_USERS_CACHE_TTL)) {
         try {
@@ -1223,7 +1227,48 @@ async function isSenderAllowed(senderMobile, sessionId = 'all') {
         return { allowed: true, user: null };
     }
 
-    const variants = getPhoneVariants(senderMobile);
+    let variants = getPhoneVariants(senderMobile);
+
+    // If senderMobile is a WhatsApp LID (digits > 13 not matching regular phone), try resolving from wh_baileys_auth
+    if (senderMobile.length > 13 && !senderMobile.startsWith('91')) {
+        try {
+            // Check if LID is directly mapped in wh_baileys_auth to an allowed number
+            const [authRows] = await pool.execute(
+                `SELECT value FROM wh_baileys_auth WHERE value LIKE ? LIMIT 10`,
+                [`%${senderMobile}%`]
+            );
+            for (const r of authRows) {
+                const strVal = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                const jidMatch = strVal.match(/(\d{10,14})@s\.whatsapp\.net/);
+                if (jidMatch && jidMatch[1]) {
+                    const resolvedVariants = getPhoneVariants(jidMatch[1]);
+                    variants = variants.concat(resolvedVariants);
+                }
+            }
+        } catch (lidErr) {
+            console.warn("⚠️ [AccessControl] LID search notice:", lidErr.message);
+        }
+    }
+
+    // Check if the number matches any bot instance itself
+    try {
+        const [botRows] = await pool.execute(
+            `SELECT phone_number FROM wh_bot_instances WHERE is_active = 1`
+        );
+        for (const b of botRows) {
+            if (b.phone_number) {
+                const bVariants = getPhoneVariants(b.phone_number);
+                if (variants.some(v => bVariants.includes(v))) {
+                    return {
+                        allowed: true,
+                        user: { user_name: 'Bot Owner / Operator', mobile_number: b.phone_number }
+                    };
+                }
+            }
+        }
+    } catch (botErr) {
+        // ignore
+    }
 
     const match = allowedUsersCache.find(u => {
         const uVariants = getPhoneVariants(u.mobile_number);
