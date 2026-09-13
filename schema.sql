@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS `wh_uploads` (
 -- --------------------------------------------------------------------
 -- 2. Aadhaar Detailed Records Table
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `wh_aadhar_card_records` (
+CREATE TABLE IF NOT EXISTS `wh_aadhaar_card_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
     `aadhar_number` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',

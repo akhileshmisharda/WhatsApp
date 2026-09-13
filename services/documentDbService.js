@@ -38,7 +38,7 @@ async function ensureAadhaarColumnsExist() {
     if (columnsChecked) return;
     try {
         const createSql = `
-            CREATE TABLE IF NOT EXISTS \`wh_aadhar_card_records\` (
+            CREATE TABLE IF NOT EXISTS \`wh_aadhaar_card_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
                 \`aadhar_number\` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',
@@ -79,7 +79,7 @@ async function ensureAadhaarColumnsExist() {
         `;
         await pool.execute(createSql);
 
-        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_aadhar_card_records`);
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_aadhaar_card_records`);
         const existingCols = cols.map(c => c.Field);
         
         const requiredCols = [
@@ -103,8 +103,8 @@ async function ensureAadhaarColumnsExist() {
 
         for (const col of requiredCols) {
             if (!existingCols.includes(col.name)) {
-                await pool.execute(`ALTER TABLE wh_aadhar_card_records ADD COLUMN \`${col.name}\` ${col.def}`);
-                console.log(`✅ [Database] Added missing column '${col.name}' to wh_aadhar_card_records`);
+                await pool.execute(`ALTER TABLE wh_aadhaar_card_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_aadhaar_card_records`);
             }
         }
         columnsChecked = true;
@@ -125,7 +125,7 @@ function shouldUpdateField(newVal, newAcc, oldVal, oldAcc) {
 }
 
 /**
- * Inserts or updates an Aadhaar record in `wh_aadhar_card_records` with multi-sided (Front/Back) merging and accuracy-based field upgrades.
+ * Inserts or updates an Aadhaar record in `wh_aadhaar_card_records` with multi-sided (Front/Back) merging and accuracy-based field upgrades.
  */
 async function insertOrUpdateAadhaar({
     uploadId,
@@ -236,7 +236,7 @@ async function insertOrUpdateAadhaar({
         // 1. Strict Lookup: Exact valid 12-digit Aadhaar Number ONLY (Format: "XXXX XXXX XXXX")
         if (payload.aadhar_number && /^\d{4}\s\d{4}\s\d{4}$/.test(payload.aadhar_number)) {
             const [rows] = await pool.execute(
-                'SELECT * FROM wh_aadhar_card_records WHERE aadhar_number = ? LIMIT 1',
+                'SELECT * FROM wh_aadhaar_card_records WHERE aadhar_number = ? LIMIT 1',
                 [payload.aadhar_number]
             );
             if (rows.length > 0) {
@@ -258,7 +258,7 @@ async function insertOrUpdateAadhaar({
             const backUri = (isBackScan && !isFrontScan) ? uploadUri : null;
 
             const insertSql = `
-                INSERT INTO wh_aadhar_card_records (
+                INSERT INTO wh_aadhaar_card_records (
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
                     dob, gender_english, gender_hindi, relation_status, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
@@ -489,7 +489,7 @@ async function insertOrUpdateAadhaar({
 
         updateParams.push(existing.id);
         const updateSql = `
-            UPDATE wh_aadhar_card_records
+            UPDATE wh_aadhaar_card_records
             SET ${updateClauses.join(', ')}
             WHERE id = ?
         `;

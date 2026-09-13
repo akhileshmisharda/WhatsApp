@@ -32,7 +32,7 @@ const {
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.3.2-SCHEMA-CARD-RECORDS";
+const APP_VERSION = "v5.3.3-AADHAAR-TABLE-UPDATE";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -511,7 +511,7 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
 
         let dbResult = null;
 
-        // 3. Upsert into wh_aadhar_card_records with intelligent Front/Back merging
+        // 3. Upsert into wh_aadhaar_card_records with intelligent Front/Back merging
         dbResult = await insertOrUpdateAadhaar({
             uploadId,
             aadharNumber: details.aadharNumber,
