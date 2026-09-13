@@ -39,7 +39,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.5-EXPLICIT-IST-TIMESTAMPS";
+const APP_VERSION = "v5.4.6-CUSTOM-MENU-ATTENDANCE-SITE";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -616,12 +616,19 @@ async function startBotSession(botConfig) {
                 const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
                 const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
-                const isCustomMenuTag = botConfig.menu_type === 'CUSTOM_MENU' && /^(hi|hello|hey|menu|help|start|1|2|3|4)$/i.test(captionText);
+                const isCustomMenuBot = botConfig.menu_type === 'CUSTOM_MENU' || (botConfig.phone_number && botConfig.phone_number.includes('9079377715')) || sessionId.includes('9079377715');
+                const isCustomMenuTag = isCustomMenuBot && (
+                    /^(hi|hello|hey|menu|help|start|1|2|3)$/i.test(captionText) ||
+                    captionText.startsWith('attandance') ||
+                    captionText.startsWith('attendance') ||
+                    captionText.startsWith('site') ||
+                    ((captionText.includes('site') || captionText.includes('attandance') || captionText.includes('attendance')) && isMedia)
+                );
 
                 // Determine if this incoming message is an intentional bot command/trigger
                 let isBotCommand = false;
 
-                if (botConfig.menu_type === 'CUSTOM_MENU') {
+                if (isCustomMenuBot) {
                     isBotCommand = isCustomMenuTag;
                 } else {
                     // DOCUMENT_OCR Bot Line:
@@ -672,7 +679,7 @@ async function startBotSession(botConfig) {
                 // ---------------------------------------------------------
                 // ROUTE ACCORDING TO BOT MENU TYPE
                 // ---------------------------------------------------------
-                if (botConfig.menu_type === 'CUSTOM_MENU') {
+                if (isCustomMenuBot) {
                     await handleCustomMenuFlow({
                         sock,
                         botConfig,
@@ -680,7 +687,9 @@ async function startBotSession(botConfig) {
                         senderMobile,
                         replyJid: senderJid,
                         textMessage: text,
-                        quotedRef
+                        quotedRef,
+                        isMedia,
+                        mimeType
                     });
                     continue;
                 }
