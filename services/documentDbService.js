@@ -751,10 +751,268 @@ async function insertJamabandiRecord({
     };
 }
 
+let saleDeedTableChecked = false;
+async function ensureSaleDeedTableExists() {
+    if (saleDeedTableChecked) return;
+    try {
+        const createSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_sale_deed_records\` (
+                \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+                \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`document_type\` VARCHAR(255) DEFAULT NULL,
+                \`deed_number\` VARCHAR(100) DEFAULT NULL,
+                \`registration_date\` VARCHAR(50) DEFAULT NULL,
+                \`sub_registrar_office\` VARCHAR(255) DEFAULT NULL,
+                \`transaction_type\` VARCHAR(255) DEFAULT NULL,
+                \`property_type\` VARCHAR(100) DEFAULT NULL,
+                \`plot_number\` VARCHAR(100) DEFAULT NULL,
+                \`khasra_number\` VARCHAR(100) DEFAULT NULL,
+                \`village\` VARCHAR(255) DEFAULT NULL,
+                \`tehsil\` VARCHAR(255) DEFAULT NULL,
+                \`district\` VARCHAR(255) DEFAULT NULL,
+                \`area_front\` VARCHAR(50) DEFAULT NULL,
+                \`area_depth\` VARCHAR(50) DEFAULT NULL,
+                \`total_area_sqft\` VARCHAR(100) DEFAULT NULL,
+                \`rakba\` VARCHAR(100) DEFAULT NULL,
+                \`boundaries\` LONGTEXT DEFAULT NULL,
+                \`sale_amount\` DECIMAL(15,2) DEFAULT NULL,
+                \`market_value\` DECIMAL(15,2) DEFAULT NULL,
+                \`payment_mode\` VARCHAR(100) DEFAULT NULL,
+                \`cheque_number\` VARCHAR(100) DEFAULT NULL,
+                \`cheque_date\` VARCHAR(50) DEFAULT NULL,
+                \`seller_name\` VARCHAR(255) DEFAULT NULL,
+                \`seller_relationship\` VARCHAR(100) DEFAULT NULL,
+                \`seller_spouse_name\` VARCHAR(255) DEFAULT NULL,
+                \`seller_age\` INT DEFAULT NULL,
+                \`seller_category\` VARCHAR(100) DEFAULT NULL,
+                \`seller_address\` LONGTEXT DEFAULT NULL,
+                \`buyer_name\` VARCHAR(255) DEFAULT NULL,
+                \`buyer_relationship\` VARCHAR(100) DEFAULT NULL,
+                \`buyer_spouse_name\` VARCHAR(255) DEFAULT NULL,
+                \`buyer_age\` INT DEFAULT NULL,
+                \`buyer_aadhaar_number\` VARCHAR(50) DEFAULT NULL,
+                \`buyer_category\` VARCHAR(100) DEFAULT NULL,
+                \`buyer_address\` LONGTEXT DEFAULT NULL,
+                \`previous_title\` LONGTEXT DEFAULT NULL,
+                \`raw_json\` LONGTEXT DEFAULT NULL,
+                \`tokens_prompt\` INT DEFAULT 0,
+                \`tokens_completion\` INT DEFAULT 0,
+                \`tokens_total\` INT DEFAULT 0,
+                \`ai_model\` VARCHAR(100) DEFAULT NULL,
+                \`accuracy_overall\` INT DEFAULT 100,
+                \`sender_mobile\` VARCHAR(25) NOT NULL,
+                \`receiver_mobile\` VARCHAR(25) NOT NULL,
+                \`document_uri\` VARCHAR(500) DEFAULT NULL,
+                \`mime_type\` VARCHAR(50) DEFAULT 'image/jpeg',
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_deed_number\` (\`deed_number\`),
+                INDEX \`idx_village\` (\`village\`),
+                INDEX \`idx_tehsil\` (\`tehsil\`),
+                INDEX \`idx_district\` (\`district\`),
+                INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createSql);
+
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_sale_deed_records`);
+        const existingCols = cols.map(c => c.Field);
+
+        const requiredCols = [
+            { name: 'upload_id', def: 'INT DEFAULT NULL' },
+            { name: 'document_type', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'deed_number', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'registration_date', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'sub_registrar_office', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'transaction_type', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'property_type', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'plot_number', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'khasra_number', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'village', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'tehsil', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'district', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'area_front', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'area_depth', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'total_area_sqft', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'rakba', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'boundaries', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'sale_amount', def: 'DECIMAL(15,2) DEFAULT NULL' },
+            { name: 'market_value', def: 'DECIMAL(15,2) DEFAULT NULL' },
+            { name: 'payment_mode', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'cheque_number', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'cheque_date', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'seller_name', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'seller_relationship', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'seller_spouse_name', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'seller_age', def: 'INT DEFAULT NULL' },
+            { name: 'seller_category', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'seller_address', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'buyer_name', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'buyer_relationship', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'buyer_spouse_name', def: 'VARCHAR(255) DEFAULT NULL' },
+            { name: 'buyer_age', def: 'INT DEFAULT NULL' },
+            { name: 'buyer_aadhaar_number', def: 'VARCHAR(50) DEFAULT NULL' },
+            { name: 'buyer_category', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'buyer_address', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'previous_title', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'raw_json', def: 'LONGTEXT DEFAULT NULL' },
+            { name: 'tokens_prompt', def: 'INT DEFAULT 0' },
+            { name: 'tokens_completion', def: 'INT DEFAULT 0' },
+            { name: 'tokens_total', def: 'INT DEFAULT 0' },
+            { name: 'ai_model', def: 'VARCHAR(100) DEFAULT NULL' },
+            { name: 'accuracy_overall', def: 'INT DEFAULT 100' },
+            { name: 'sender_mobile', def: "VARCHAR(25) NOT NULL DEFAULT 'Unknown'" },
+            { name: 'receiver_mobile', def: "VARCHAR(25) NOT NULL DEFAULT 'Unknown'" },
+            { name: 'document_uri', def: 'VARCHAR(500) DEFAULT NULL' },
+            { name: 'mime_type', def: "VARCHAR(50) DEFAULT 'image/jpeg'" }
+        ];
+
+        for (const col of requiredCols) {
+            if (!existingCols.includes(col.name)) {
+                await pool.execute(`ALTER TABLE wh_sale_deed_records ADD COLUMN \`${col.name}\` ${col.def}`);
+                console.log(`✅ [Database] Added missing column '${col.name}' to wh_sale_deed_records`);
+            }
+        }
+
+        saleDeedTableChecked = true;
+        console.log("✅ [Database] Checked/Migrated 'wh_sale_deed_records' table");
+    } catch (err) {
+        console.warn("⚠️ [Database] Sale Deed table check warning:", err.message);
+    }
+}
+
+/**
+ * Inserts structured Sale Deed records into wh_sale_deed_records
+ */
+async function insertSaleDeedRecord({
+    uploadId,
+    documentType,
+    deedNumber,
+    registrationDate,
+    subRegistrarOffice,
+    transactionType,
+    propertyType,
+    plotNumber,
+    khasraNumber,
+    village,
+    tehsil,
+    district,
+    areaFront,
+    areaDepth,
+    totalAreaSqft,
+    rakba,
+    boundaries,
+    saleAmount,
+    marketValue,
+    paymentMode,
+    chequeNumber,
+    chequeDate,
+    sellerName,
+    sellerRelationship,
+    sellerSpouseName,
+    sellerAge,
+    sellerCategory,
+    sellerAddress,
+    buyerName,
+    buyerRelationship,
+    buyerSpouseName,
+    buyerAge,
+    buyerAadhaarNumber,
+    buyerCategory,
+    buyerAddress,
+    previousTitle,
+    rawJson,
+    tokensPrompt,
+    tokensCompletion,
+    tokensTotal,
+    aiModel,
+    accuracyOverall,
+    senderMobile,
+    receiverMobile,
+    documentUri,
+    mimeType
+}) {
+    await ensureSaleDeedTableExists();
+
+    const insertSql = `
+        INSERT INTO wh_sale_deed_records (
+            upload_id, document_type, deed_number, registration_date, sub_registrar_office,
+            transaction_type, property_type, plot_number, khasra_number, village,
+            tehsil, district, area_front, area_depth, total_area_sqft, rakba,
+            boundaries, sale_amount, market_value, payment_mode, cheque_number,
+            cheque_date, seller_name, seller_relationship, seller_spouse_name,
+            seller_age, seller_category, seller_address, buyer_name,
+            buyer_relationship, buyer_spouse_name, buyer_age, buyer_aadhaar_number,
+            buyer_category, buyer_address, previous_title, raw_json,
+            tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
+            sender_mobile, receiver_mobile, document_uri, mime_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const params = [
+        uploadId || null,
+        sanitizeInput(documentType),
+        sanitizeInput(deedNumber),
+        sanitizeInput(registrationDate),
+        sanitizeInput(subRegistrarOffice),
+        sanitizeInput(transactionType),
+        sanitizeInput(propertyType),
+        sanitizeInput(plotNumber),
+        sanitizeInput(khasraNumber),
+        sanitizeInput(village),
+        sanitizeInput(tehsil),
+        sanitizeInput(district),
+        sanitizeInput(areaFront),
+        sanitizeInput(areaDepth),
+        sanitizeInput(totalAreaSqft),
+        sanitizeInput(rakba),
+        typeof boundaries === 'object' ? JSON.stringify(boundaries) : sanitizeInput(boundaries),
+        typeof saleAmount === 'number' ? saleAmount : (parseFloat(saleAmount) || null),
+        typeof marketValue === 'number' ? marketValue : (parseFloat(marketValue) || null),
+        sanitizeInput(paymentMode),
+        sanitizeInput(chequeNumber),
+        sanitizeInput(chequeDate),
+        sanitizeInput(sellerName),
+        sanitizeInput(sellerRelationship),
+        sanitizeInput(sellerSpouseName),
+        typeof sellerAge === 'number' ? sellerAge : (parseInt(sellerAge, 10) || null),
+        sanitizeInput(sellerCategory),
+        typeof sellerAddress === 'object' ? JSON.stringify(sellerAddress) : sanitizeInput(sellerAddress),
+        sanitizeInput(buyerName),
+        sanitizeInput(buyerRelationship),
+        sanitizeInput(buyerSpouseName),
+        typeof buyerAge === 'number' ? buyerAge : (parseInt(buyerAge, 10) || null),
+        sanitizeInput(buyerAadhaarNumber),
+        sanitizeInput(buyerCategory),
+        typeof buyerAddress === 'object' ? JSON.stringify(buyerAddress) : sanitizeInput(buyerAddress),
+        typeof previousTitle === 'object' ? JSON.stringify(previousTitle) : sanitizeInput(previousTitle),
+        typeof rawJson === 'object' ? JSON.stringify(rawJson) : sanitizeInput(rawJson),
+        typeof tokensPrompt === 'number' ? tokensPrompt : 0,
+        typeof tokensCompletion === 'number' ? tokensCompletion : 0,
+        typeof tokensTotal === 'number' ? tokensTotal : 0,
+        sanitizeInput(aiModel) || 'gemini-3.1-flash',
+        typeof accuracyOverall === 'number' ? accuracyOverall : 100,
+        sanitizeInput(senderMobile) || 'Unknown',
+        sanitizeInput(receiverMobile) || 'Unknown',
+        sanitizeInput(documentUri),
+        sanitizeInput(mimeType) || 'image/jpeg'
+    ];
+
+    const [result] = await pool.execute(insertSql, params);
+
+    return {
+        status: 'success',
+        action: 'inserted',
+        recordId: result.insertId,
+        message: 'New Sale Deed record created.'
+    };
+}
+
 module.exports = {
     logImageUpload,
     insertOrUpdateAadhaar,
     insertOrUpdatePan,
-    insertJamabandiRecord
+    insertJamabandiRecord,
+    insertSaleDeedRecord
 };
 

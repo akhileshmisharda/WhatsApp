@@ -600,8 +600,207 @@ Output ONLY raw valid JSON without markdown formatting.`;
     throw new Error('Jamabandi document extraction failed. Please ensure the image or PDF is clear and readable.');
 }
 
+/**
+ * Extracts structured Sale Deed (विक्रय पत्र / बैनामा) land records using Universal Registry Schema
+ * @param {Buffer} buffer - Image or PDF buffer
+ * @param {string} mimeType - 'application/pdf' or 'image/jpeg'
+ * @returns {Promise<Object>}
+ */
+async function extractSaleDeedWithGemini(buffer, mimeType = 'image/jpeg') {
+    const apiKey = await getGeminiApiKey();
+    const base64Data = buffer.toString('base64');
+    const isPdf = mimeType === 'application/pdf' || (typeof mimeType === 'string' && mimeType.toLowerCase().includes('pdf'));
+    const actualMime = isPdf ? 'application/pdf' : 'image/jpeg';
+
+    const systemPrompt = `You are a universal OCR extraction engine for property registry systems (Rajasthan Jamabandi P-26C, Aadhaar, PAN, Sale Deed / बैनामा / विक्रय पत्र).
+
+Strict Rules:
+1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array.
+2. MAPPING KEYS: You MUST accurately identify the 'party_type' (property, buyer, seller, witness) and 'document_type' (sale_deed, old_jamabandi, aadhaar_card, pan_card) to match the system checklist.
+3. CONDITIONAL POPULATION: Depending on the 'document_type', fill ONLY the corresponding data object ('sale_deed_data', 'old_jamabandi_data', 'aadhaar_card_data', or 'pan_card_data') and leave the others null.
+4. ABSOLUTE VERBATIM EXTRACTION: Extract visible text exactly as printed. Do not correct spelling, archaic legal terms, or names.
+5. ZERO FABRICATION: If a field or table cell is missing or unreadable, set it to empty string ''. Never guess digits or dates.
+6. NUMERIC ACCURACY: Extract all land areas, rent amounts, consideration value, account numbers, and dates using standard Arabic numerals (0-9). Preserve exact decimal precision.
+7. ACCURACY SCORE: Evaluate your own confidence (0-100) and return it in 'accuracyFields'.
+8. HINDI DATA RETENTION: All Hindi data must be extracted and returned in Hindi (Devanagari script) only. Do not translate Hindi names, addresses, or boundaries into English.`;
+
+    const userPrompt = `Extract this Property Sale Deed document (बैनामा / विक्रय पत्र / रजिस्ट्री) into the following exact JSON schema:
+{
+  "extracted_documents": [
+    {
+      "party_type": "property",
+      "document_type": "sale_deed",
+      "sale_deed_data": {
+        "document_type": "Document title or type, e.g., Sale Deed",
+        "deed_number": "Document/Deed registration number",
+        "registration_date": "Date of property registration (DD-MM-YYYY)",
+        "sub_registrar_office": "Name of the Sub-Registrar Office (SRO) where registered",
+        "transaction_type": "Specific type of transaction, e.g., Sale Deed (Female SC/ST/BPL)",
+        "property": {
+          "property_type": "Type of property being transacted, e.g., Agricultural Plot, Residential",
+          "plot_number": "Plot number of the property",
+          "area": {
+            "front": "Front measurement of the plot/property area",
+            "depth": "Depth measurement of the plot/property area",
+            "total_area_sqft": "Total calculated area of the property including units, e.g., '800 varg fit' or '800 sq ft'"
+          },
+          "village": "Village name where the property is located. All Hindi data should be in Hindi only.",
+          "tehsil": "Tehsil name. All Hindi data should be in Hindi only.",
+          "district": "District name. All Hindi data should be in Hindi only.",
+          "khasra_number": "Khasra, Survey, or Aaraji number of the property (e.g., '822').",
+          "rakba": "Agriculture field area details in Bigha and Biswa (e.g., '01 बीघा 11 बिस्वा'). All Hindi data should be in Hindi only.",
+          "boundaries": {
+            "east": "Eastern boundary details. All Hindi data should be in Hindi only.",
+            "west": "Western boundary details. All Hindi data should be in Hindi only.",
+            "north": "Northern boundary details. All Hindi data should be in Hindi only.",
+            "south": "Southern boundary details. All Hindi data should be in Hindi only."
+          }
+        },
+        "consideration": {
+          "sale_amount": 0,
+          "market_value": 0,
+          "payment_mode": "Mode of payment, e.g., Cheque, Cash, RTGS, DD",
+          "cheque_number": "Reference number of the cheque or transaction",
+          "cheque_date": "Date of the cheque or payment transaction"
+        },
+        "seller": {
+          "seller_name": "Name of the seller. All Hindi data should be in Hindi only.",
+          "seller_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
+          "seller_spouse_name": "Name of the seller's spouse or father. All Hindi data should be in Hindi only.",
+          "seller_age": 0,
+          "seller_address": {
+            "area": "Locality or area of the seller's address. All Hindi data should be in Hindi only.",
+            "seller_city": "City of the seller. All Hindi data should be in Hindi only.",
+            "seller_state": "State of the seller",
+            "seller_pincode": "Postal PIN code of the seller"
+          },
+          "category": "Caste or category of the seller (e.g., General, SC, ST)"
+        },
+        "buyer": {
+          "buyer_name": "Name of the buyer. All Hindi data should be in Hindi only.",
+          "buyer_relationship": "Relationship with the relative mentioned (e.g., S/O, D/O, W/O, C/O). All Hindi data should be in Hindi only.",
+          "buyer_spouse_name": "Name of the buyer's spouse or father. All Hindi data should be in Hindi only.",
+          "buyer_age": 0,
+          "buyer_address": {
+            "village": "Village of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_post": "Post office of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_district": "District of the buyer. All Hindi data should be in Hindi only.",
+            "buyer_state": "State of the buyer",
+            "buyer_pincode": "Postal PIN code of the buyer"
+          },
+          "aadhaar_number": "12-digit format",
+          "category": "Caste or category of the buyer (e.g., Female SC/ST/BPL)"
+        },
+        "previous_title": {
+          "previous_owner": "Name of the previous owner of the property",
+          "registry_number": "Registration number of the previous title deed",
+          "registry_date": "Date of the previous title deed registration"
+        }
+      }
+    }
+  ],
+  "accuracy_overall": 100
+}
+
+Output ONLY raw valid JSON without markdown formatting.`;
+
+    const requestBody = {
+        systemInstruction: {
+            parts: [
+                { text: systemPrompt }
+            ]
+        },
+        contents: [
+            {
+                parts: [
+                    { text: userPrompt },
+                    {
+                        inlineData: {
+                            mimeType: actualMime,
+                            data: base64Data
+                        }
+                    }
+                ]
+            }
+        ],
+        generationConfig: {
+            temperature: 0.0,
+            maxOutputTokens: 8192,
+            responseMimeType: "application/json"
+        }
+    };
+
+    let lastError = null;
+
+    for (const model of MODELS) {
+        const urls = getGeminiUrls(model, apiKey);
+        for (const url of urls) {
+            try {
+                console.log(`🤖 [AI Engine] Attempting Sale Deed extraction with ${model}...`);
+                const response = await axios.post(url, requestBody, {
+                    headers: buildGeminiHeaders(apiKey),
+                    timeout: 60000
+                });
+
+                const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+                
+                const rawUsage = response.data?.usageMetadata || response.data?.usage || {};
+                const promptTokens = Number(rawUsage.promptTokenCount ?? rawUsage.prompt_token_count ?? 0);
+                const candidatesTokens = Number(rawUsage.candidatesTokenCount ?? rawUsage.candidates_token_count ?? 0);
+                const totalTokens = Number(rawUsage.totalTokenCount ?? rawUsage.total_token_count ?? (promptTokens + candidatesTokens));
+
+                const tokens = { promptTokens, candidatesTokens, totalTokens };
+                
+                let parsed = null;
+                try {
+                    const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+                    parsed = JSON.parse(cleaned);
+                } catch (jsonErr) {
+                    const match = textResponse.match(/\{[\s\S]*\}/);
+                    if (match) {
+                        parsed = JSON.parse(match[0]);
+                    } else {
+                        throw new Error(`Failed to parse JSON response: ${jsonErr.message}`);
+                    }
+                }
+
+                let deedData = null;
+                let overallAcc = parsed.accuracy_overall || 100;
+
+                const docList = parsed.extracted_documents || [];
+                if (Array.isArray(docList) && docList.length > 0) {
+                    const item = docList.find(d => d.document_type === 'sale_deed' || d.sale_deed_data) || docList[0];
+                    deedData = item.sale_deed_data || item;
+                } else if (parsed.sale_deed_data) {
+                    deedData = parsed.sale_deed_data;
+                } else {
+                    deedData = parsed;
+                }
+
+                console.log(`✅ [AI Engine] Successfully extracted Sale Deed using ${model} (Tokens: ${totalTokens})`);
+                return {
+                    success: true,
+                    model,
+                    engine: `AI Engine (${model})`,
+                    tokens,
+                    accuracy: overallAcc,
+                    data: deedData,
+                    rawJson: parsed
+                };
+
+            } catch (err) {
+                lastError = err.response?.data?.error?.message || err.message;
+                console.warn(`⚠️ [AI Engine ${model}] Sale Deed extraction warning:`, lastError);
+            }
+        }
+    }
+
+    throw new Error('Sale Deed document extraction failed. Please ensure the image or PDF is clear and readable.');
+}
+
 module.exports = {
     extractAadhaarWithGemini,
     extractPanWithGemini,
-    extractJamabandiWithGemini
+    extractJamabandiWithGemini,
+    extractSaleDeedWithGemini
 };

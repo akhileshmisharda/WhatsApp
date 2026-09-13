@@ -20,18 +20,19 @@ const {
 const pool = require('./services/db');
 const { useMySQLAuthState } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
-const { extractAadhaarWithGemini, extractPanWithGemini, extractJamabandiWithGemini } = require('./services/geminiVisionService');
+const { extractAadhaarWithGemini, extractPanWithGemini, extractJamabandiWithGemini, extractSaleDeedWithGemini } = require('./services/geminiVisionService');
 const {
     logImageUpload,
     insertOrUpdateAadhaar,
     insertOrUpdatePan,
-    insertJamabandiRecord
+    insertJamabandiRecord,
+    insertSaleDeedRecord
 } = require('./services/documentDbService');
 
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.2.1-IST-TIMEZONE";
+const APP_VERSION = "v5.3.0-SALE-DEED-PARSER";
 
 let sock = null;
 let currentBotNumber = "Unknown";
@@ -372,14 +373,15 @@ async function startBot() {
                     continue;
                 }
 
-                // Command Triggers: Aadhaar (A), PAN (P), Jamabandi (J)
+                // Command Triggers: Aadhaar (A), PAN (P), Jamabandi (J), Sale Deed (S)
                 const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
                 const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
                 const isJamabandiTag = /^(j|jamabandi|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("जमाबंदी");
+                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
 
                 if (msg.key.fromMe) {
-                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag)) || (isExactGreeting && !isMedia))) {
+                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) || (isExactGreeting && !isMedia))) {
                         continue;
                     }
                 }
@@ -395,8 +397,8 @@ async function startBot() {
                     continue;
                 }
 
-                // 2. Document Processing (ONLY if caption has aadhar/a, pan/p, or jamabandi/j)
-                if (!isAadhaarTag && !isPanTag && !isJamabandiTag) {
+                // 2. Document Processing (ONLY if caption has aadhar/a, pan/p, jamabandi/j, or sale_deed/s)
+                if (!isAadhaarTag && !isPanTag && !isJamabandiTag && !isSaleDeedTag) {
                     continue;
                 }
 
@@ -421,6 +423,8 @@ async function startBot() {
                     await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
                 } else if (isMedia && isJamabandiTag) {
                     await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                } else if (isMedia && isSaleDeedTag) {
+                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
                 }
             }
         } catch (err) {
@@ -449,6 +453,10 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
         `• Caption: *j* or *jamabandi*\n` +
         `• Format: Image or PDF\n` +
         `• Extracted: Village, Patwar Halka, Tehsil, District, Khata No, Total Area, Khatedar List & Khasra Plots\n\n` +
+        `*Sale Deed (बैनामा / विक्रय पत्र):*\n` +
+        `• Caption: *s* or *sale_deed*\n` +
+        `• Format: Image or PDF\n` +
+        `• Extracted: Deed No, Registration Date, SRO, Property Details, Area/Rakba, Boundaries, Consideration/Cheque, Seller & Buyer Details\n\n` +
         `Powered by FabKraft AI`;
 
     await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
@@ -790,6 +798,146 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
 
     } catch (err) {
         logEvent("JAMABANDI_ERROR", `Failed for ${senderMobile}: ${err.message}`);
+        const userMsg = sanitizeUserFacingError(err);
+        await sock.sendMessage(replyJid, {
+            text: `Processing Failed: ${userMsg}`
+        }, { quoted: quotedRef || mediaMsgObj });
+    }
+}
+
+/**
+ * Handles Sale Deed Upload (Image/PDF) + Universal Property Registry AI Extraction
+ */
+async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
+    logEvent("SALEDEED_START", `Processing Sale Deed (${mimeType}) with AI for ${senderMobile}...`);
+
+    await sock.sendMessage(replyJid, {
+        text: `Sale Deed Document detected. Extracting registry details and saving...`
+    }, { quoted: quotedRef || mediaMsgObj });
+
+    try {
+        const buffer = await downloadMediaMessage(
+            mediaMsgObj,
+            'buffer',
+            {},
+            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
+        );
+
+        const timestamp = Date.now();
+        const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
+        const fileName = `saledeed_${senderMobile}_${timestamp}.${ext}`;
+
+        // 1. Parallel Execution: Upload to Fabkraft & Extract with AI
+        const [uploadResult, geminiResult] = await Promise.all([
+            uploadToFabkraft(buffer, fileName, 'saledeed', mimeType),
+            extractSaleDeedWithGemini(buffer, mimeType)
+        ]);
+
+        if (!uploadResult.success) {
+            throw new Error(`Server upload failed: ${uploadResult.error}`);
+        }
+
+        const uploadUri = uploadResult.uploadUri;
+        const details = geminiResult.data || {};
+        const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
+        const accuracy = geminiResult.accuracy || 100;
+
+        const docId = details.deed_number ? `DEED-${details.deed_number}` : `DOC${timestamp.toString().slice(-6)}`;
+
+        // 2. Insert record into wh_uploads
+        const uploadId = await logImageUpload({
+            receiverMobile: currentBotNumber,
+            senderMobile: senderMobile,
+            imageCaption: 'Sale Deed',
+            imageId: docId,
+            uploadUri: uploadUri
+        });
+
+        const prop = details.property || {};
+        const area = prop.area || {};
+        const cons = details.consideration || {};
+        const seller = details.seller || {};
+        const buyer = details.buyer || {};
+
+        // 3. Insert record into wh_sale_deed_records
+        const sdResult = await insertSaleDeedRecord({
+            uploadId,
+            documentType: details.document_type || 'Sale Deed',
+            deedNumber: details.deed_number,
+            registrationDate: details.registration_date,
+            subRegistrarOffice: details.sub_registrar_office,
+            transactionType: details.transaction_type,
+            propertyType: prop.property_type,
+            plotNumber: prop.plot_number,
+            khasraNumber: prop.khasra_number,
+            village: prop.village,
+            tehsil: prop.tehsil,
+            district: prop.district,
+            areaFront: area.front,
+            areaDepth: area.depth,
+            totalAreaSqft: area.total_area_sqft,
+            rakba: prop.rakba,
+            boundaries: prop.boundaries,
+            saleAmount: cons.sale_amount,
+            marketValue: cons.market_value,
+            paymentMode: cons.payment_mode,
+            chequeNumber: cons.cheque_number,
+            chequeDate: cons.cheque_date,
+            sellerName: seller.seller_name,
+            sellerRelationship: seller.seller_relationship,
+            sellerSpouseName: seller.seller_spouse_name,
+            sellerAge: seller.seller_age,
+            sellerCategory: seller.category,
+            sellerAddress: seller.seller_address,
+            buyerName: buyer.buyer_name,
+            buyerRelationship: buyer.buyer_relationship,
+            buyerSpouseName: buyer.buyer_spouse_name,
+            buyerAge: buyer.buyer_age,
+            buyerAadhaarNumber: buyer.aadhaar_number,
+            buyerCategory: buyer.category,
+            buyerAddress: buyer.buyer_address,
+            previousTitle: details.previous_title,
+            rawJson: geminiResult.rawJson,
+            tokensPrompt: tokens.promptTokens,
+            tokensCompletion: tokens.candidatesTokens,
+            tokensTotal: tokens.totalTokens,
+            aiModel: geminiResult.model,
+            accuracyOverall: accuracy,
+            senderMobile: senderMobile,
+            receiverMobile: currentBotNumber,
+            documentUri: uploadUri,
+            mimeType: mimeType
+        });
+
+        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+        const saleDeedRecordId = sdResult?.recordId || uploadId;
+
+        let areaText = displayVal(area.total_area_sqft || prop.rakba);
+        let considerationText = cons.sale_amount ? `₹${Number(cons.sale_amount).toLocaleString('en-IN')}` : 'Not Found';
+
+        const replyText = 
+            `*SALE DEED EXTRACTED & SAVED*\n\n` +
+            `*Record ID:* #${saleDeedRecordId}\n` +
+            `*Sent By:* ${senderMobile}\n\n` +
+            `*Deed / Registry No:* ${displayVal(details.deed_number)}\n` +
+            `*Registration Date:* ${displayVal(details.registration_date)}\n` +
+            `*Sub-Registrar Office:* ${displayVal(details.sub_registrar_office)}\n` +
+            `*Village (ग्राम):* ${displayVal(prop.village)}\n` +
+            `*Tehsil (तहसील):* ${displayVal(prop.tehsil)}\n` +
+            `*District (जिला):* ${displayVal(prop.district)}\n` +
+            `*Khasra / Plot No:* ${displayVal(prop.khasra_number || prop.plot_number)}\n` +
+            `*Area / Rakba:* ${areaText}\n` +
+            `*Sale Consideration:* ${considerationText}\n` +
+            `*Seller:* ${displayVal(seller.seller_name)}\n` +
+            `*Buyer:* ${displayVal(buyer.buyer_name)}\n` +
+            `*Accuracy Score:* ${accuracy}%\n\n` +
+            `Powered by FabKraft AI`;
+
+        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        logEvent("SALEDEED_SUCCESS", `Sale Deed processed with Record ID #${saleDeedRecordId} for ${senderMobile}`);
+
+    } catch (err) {
+        logEvent("SALEDEED_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         const userMsg = sanitizeUserFacingError(err);
         await sock.sendMessage(replyJid, {
             text: `Processing Failed: ${userMsg}`
