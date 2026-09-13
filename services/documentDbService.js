@@ -8,21 +8,34 @@ function sanitizeInput(val) {
 }
 
 /**
+ * Generates an exact Indian Standard Time (IST / UTC+05:30) timestamp formatted as 'YYYY-MM-DD HH:mm:ss'
+ * Independent of server OS, Docker, or database default timezone.
+ */
+function getISTNow() {
+    const d = new Date();
+    const istDate = new Date(d.getTime() + (330 * 60 * 1000));
+    return istDate.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/**
  * Inserts an entry into the master tracking table `wh_uploads`
  */
 async function logImageUpload({ receiverMobile, senderMobile, imageCaption, imageId, uploadUri }) {
     try {
+        const istNow = getISTNow();
         const sql = `
             INSERT INTO wh_uploads (
-                receiver_mobile, sender_mobile, image_caption, image_id, upload_uri
-            ) VALUES (?, ?, ?, ?, ?)
+                receiver_mobile, sender_mobile, image_caption, image_id, upload_uri, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
         const params = [
             sanitizeInput(receiverMobile) || 'Unknown',
             sanitizeInput(senderMobile) || 'Unknown',
             sanitizeInput(imageCaption) || 'Unknown',
             sanitizeInput(imageId),
-            sanitizeInput(uploadUri)
+            sanitizeInput(uploadUri),
+            istNow,
+            istNow
         ];
 
         const [result] = await pool.execute(sql, params);
@@ -257,6 +270,7 @@ async function insertOrUpdateAadhaar({
             const frontUri = (isBackScan && !isFrontScan) ? null : uploadUri;
             const backUri = (isBackScan && !isFrontScan) ? uploadUri : null;
 
+            const istNow = getISTNow();
             const insertSql = `
                 INSERT INTO wh_aadhaar_card_records (
                     upload_id, aadhar_number, virtual_id, name_english, name_hindi,
@@ -265,8 +279,9 @@ async function insertOrUpdateAadhaar({
                     pincode, raw_json, tokens_prompt, tokens_completion, tokens_total, ai_model,
                     accuracy_overall, accuracy_aadhaar_number, accuracy_name_english,
                     accuracy_name_hindi, accuracy_dob, accuracy_pincode,
-                    sender_mobile, receiver_mobile, front_image_uri, back_image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sender_mobile, receiver_mobile, front_image_uri, back_image_uri,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
@@ -300,7 +315,9 @@ async function insertOrUpdateAadhaar({
                 payload.sender_mobile,
                 payload.receiver_mobile,
                 frontUri,
-                backUri
+                backUri,
+                istNow,
+                istNow
             ];
 
             const [result] = await pool.execute(insertSql, insertParams);
@@ -481,8 +498,8 @@ async function insertOrUpdateAadhaar({
         const newTotalTokens = (Number(existing.tokens_total) || 0) + (Number(payload.tokens_total) || 0);
         const bestOverallAccuracy = Math.max(Number(existing.accuracy_overall) || 0, Number(payload.accuracy_overall) || 100);
 
-        updateClauses.push('`tokens_prompt` = ?', '`tokens_completion` = ?', '`tokens_total` = ?', '`accuracy_overall` = ?', '`upload_id` = ?');
-        updateParams.push(newTotalPrompt, newTotalCompletion, newTotalTokens, bestOverallAccuracy, payload.upload_id || existing.upload_id);
+        updateClauses.push('`tokens_prompt` = ?', '`tokens_completion` = ?', '`tokens_total` = ?', '`accuracy_overall` = ?', '`upload_id` = ?', '`updated_at` = ?');
+        updateParams.push(newTotalPrompt, newTotalCompletion, newTotalTokens, bestOverallAccuracy, payload.upload_id || existing.upload_id, getISTNow());
 
         updateParams.push(existing.id);
         const updateSql = `
@@ -574,11 +591,13 @@ async function insertOrUpdatePan({
         );
 
         if (rows.length === 0) {
+            const istNow = getISTNow();
             const insertSql = `
                 INSERT INTO wh_pan_card_records (
                     upload_id, pan_number, name, father_name, dob,
-                    sender_mobile, receiver_mobile, image_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    sender_mobile, receiver_mobile, image_uri,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const params = [
                 payload.upload_id,
@@ -588,7 +607,9 @@ async function insertOrUpdatePan({
                 payload.dob,
                 payload.sender_mobile,
                 payload.receiver_mobile,
-                payload.image_uri
+                payload.image_uri,
+                istNow,
+                istNow
             ];
             const [result] = await pool.execute(insertSql, params);
 
@@ -613,6 +634,9 @@ async function insertOrUpdatePan({
             if (updateClauses.length === 0) {
                 return { status: 'success', action: 'none', recordId: rows[0].id, message: 'No new data.' };
             }
+
+            updateClauses.push('`updated_at` = ?');
+            updateParams.push(getISTNow());
 
             updateParams.push(payload.pan_number);
             const updateSql = `
@@ -769,6 +793,7 @@ async function insertJamabandiRecord({
     const khatedarArray = Array.isArray(khatedarDetails) ? khatedarDetails : [];
     const khasraArray = Array.isArray(khasraDetails) ? khasraDetails : [];
 
+    const istNow = getISTNow();
     const insertSql = `
         INSERT INTO wh_old_jamabandi_records (
             upload_id, form_name, document_type, village, patwar_halka,
@@ -776,8 +801,9 @@ async function insertJamabandiRecord({
             area_unit, khata_no_new, khata_no_old, total_khasra_count, total_area,
             total_rent, khatedar_count, khatedar_details, khasra_details, raw_json,
             tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
-            sender_mobile, receiver_mobile, document_uri, mime_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sender_mobile, receiver_mobile, document_uri, mime_type,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
@@ -809,7 +835,9 @@ async function insertJamabandiRecord({
         sanitizeInput(senderMobile) || 'Unknown',
         sanitizeInput(receiverMobile) || 'Unknown',
         sanitizeInput(documentUri),
-        sanitizeInput(mimeType) || 'image/jpeg'
+        sanitizeInput(mimeType) || 'image/jpeg',
+        istNow,
+        istNow
     ];
 
     const [result] = await pool.execute(insertSql, params);
@@ -1005,6 +1033,7 @@ async function insertSaleDeedRecord({
 }) {
     await ensureSaleDeedTableExists();
 
+    const istNow = getISTNow();
     const insertSql = `
         INSERT INTO wh_sale_deed_records (
             upload_id, document_type, deed_number, registration_date, sub_registrar_office,
@@ -1016,8 +1045,9 @@ async function insertSaleDeedRecord({
             buyer_relationship, buyer_spouse_name, buyer_age, buyer_aadhaar_number,
             buyer_category, buyer_address, previous_title, raw_json,
             tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
-            sender_mobile, receiver_mobile, document_uri, mime_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sender_mobile, receiver_mobile, document_uri, mime_type,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
@@ -1066,7 +1096,9 @@ async function insertSaleDeedRecord({
         sanitizeInput(senderMobile) || 'Unknown',
         sanitizeInput(receiverMobile) || 'Unknown',
         sanitizeInput(documentUri),
-        sanitizeInput(mimeType) || 'image/jpeg'
+        sanitizeInput(mimeType) || 'image/jpeg',
+        istNow,
+        istNow
     ];
 
     const [result] = await pool.execute(insertSql, params);
@@ -1345,6 +1377,7 @@ async function updateBotStatus(sessionId, { status, phoneNumber, lastConnectedAt
     try {
         const updates = [];
         const params = [];
+        const istNow = getISTNow();
 
         if (status !== undefined) {
             updates.push('`connection_status` = ?');
@@ -1355,13 +1388,18 @@ async function updateBotStatus(sessionId, { status, phoneNumber, lastConnectedAt
             params.push(phoneNumber);
         }
         if (lastConnectedAt !== undefined) {
-            updates.push('`last_connected_at` = NOW()');
+            updates.push('`last_connected_at` = ?');
+            params.push(istNow);
         }
         if (lastQrAt !== undefined) {
-            updates.push('`last_qr_at` = NOW()');
+            updates.push('`last_qr_at` = ?');
+            params.push(istNow);
         }
 
         if (updates.length === 0) return;
+
+        updates.push('`updated_at` = ?');
+        params.push(istNow);
 
         params.push(sessionId);
         await pool.execute(

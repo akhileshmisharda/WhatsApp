@@ -12,9 +12,10 @@ async function useMySQLAuthState(sessionId = 'default') {
         try {
             memoryCache.set(id, data);
             const jsonStr = JSON.stringify(data, BufferJSON.replacer);
+            const istNow = new Date(Date.now() + (330 * 60 * 1000)).toISOString().slice(0, 19).replace('T', ' ');
             await pool.execute(
-                `INSERT INTO wh_baileys_auth (session_id, id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-                [sessionId, id, jsonStr]
+                `INSERT INTO wh_baileys_auth (session_id, id, value, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)`,
+                [sessionId, id, jsonStr, istNow]
             );
         } catch (error) {
             console.error(`[MySQLAuth:${sessionId}] Error saving key ${id}:`, error.message);
