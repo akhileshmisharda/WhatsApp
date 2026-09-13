@@ -2,9 +2,10 @@ const { proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const pool = require('./db');
 
 /**
- * High-performance MySQL Auth State with In-Memory Cache & Batch Fetching
+ * High-performance MySQL Auth State with In-Memory Cache & Batch Fetching isolated per session_id
+ * @param {string} sessionId - Unique identifier for the bot instance (e.g., 'bot_9610238234', 'bot_9079377715')
  */
-async function useMySQLAuthState() {
+async function useMySQLAuthState(sessionId = 'default') {
     const memoryCache = new Map();
 
     const writeData = async (id, data) => {
@@ -12,11 +13,11 @@ async function useMySQLAuthState() {
             memoryCache.set(id, data);
             const jsonStr = JSON.stringify(data, BufferJSON.replacer);
             await pool.execute(
-                `INSERT INTO wh_baileys_auth (id, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-                [id, jsonStr]
+                `INSERT INTO wh_baileys_auth (session_id, id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+                [sessionId, id, jsonStr]
             );
         } catch (error) {
-            console.error(`[MySQLAuth] Error saving key ${id}:`, error.message);
+            console.error(`[MySQLAuth:${sessionId}] Error saving key ${id}:`, error.message);
         }
     };
 
@@ -26,8 +27,8 @@ async function useMySQLAuthState() {
         }
         try {
             const [rows] = await pool.execute(
-                `SELECT value FROM wh_baileys_auth WHERE id = ?`,
-                [id]
+                `SELECT value FROM wh_baileys_auth WHERE session_id = ? AND id = ?`,
+                [sessionId, id]
             );
             if (rows.length > 0) {
                 const parsed = JSON.parse(rows[0].value, BufferJSON.reviver);
@@ -36,7 +37,7 @@ async function useMySQLAuthState() {
             }
             return null;
         } catch (error) {
-            console.error(`[MySQLAuth] Error reading key ${id}:`, error.message);
+            console.error(`[MySQLAuth:${sessionId}] Error reading key ${id}:`, error.message);
             return null;
         }
     };
@@ -44,9 +45,9 @@ async function useMySQLAuthState() {
     const removeData = async (id) => {
         memoryCache.delete(id);
         try {
-            await pool.execute(`DELETE FROM wh_baileys_auth WHERE id = ?`, [id]);
+            await pool.execute(`DELETE FROM wh_baileys_auth WHERE session_id = ? AND id = ?`, [sessionId, id]);
         } catch (error) {
-            console.error(`[MySQLAuth] Error deleting key ${id}:`, error.message);
+            console.error(`[MySQLAuth:${sessionId}] Error deleting key ${id}:`, error.message);
         }
     };
 
@@ -75,14 +76,14 @@ async function useMySQLAuthState() {
                         }
                     }
 
-                    // Fetch missing keys in a SINGLE batch SQL query instead of 50 separate queries
+                    // Fetch missing keys in a SINGLE batch SQL query isolated by session_id
                     if (missingFromCache.length > 0) {
                         try {
                             const keysToFetch = missingFromCache.map(id => `${type}-${id}`);
                             const placeholders = keysToFetch.map(() => '?').join(',');
                             const [rows] = await pool.query(
-                                `SELECT id, value FROM wh_baileys_auth WHERE id IN (${placeholders})`,
-                                keysToFetch
+                                `SELECT id, value FROM wh_baileys_auth WHERE session_id = ? AND id IN (${placeholders})`,
+                                [sessionId, ...keysToFetch]
                             );
 
                             const fetchedMap = new Map();
@@ -100,8 +101,7 @@ async function useMySQLAuthState() {
                                 data[id] = val;
                             }
                         } catch (err) {
-                            console.error(`[MySQLAuth] Batch fetch error for ${type}:`, err.message);
-                            // Fallback to null for missing
+                            console.error(`[MySQLAuth:${sessionId}] Batch fetch error for ${type}:`, err.message);
                             for (const id of missingFromCache) {
                                 data[id] = null;
                             }

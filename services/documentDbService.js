@@ -1079,11 +1079,267 @@ async function insertSaleDeedRecord({
     };
 }
 
+// ---------------------------------------------------------
+// MULTI-BOT SESSIONS & ACCESS CONTROL (WHITELIST)
+// ---------------------------------------------------------
+
+let allowedUsersCache = null;
+let lastAllowedUsersFetch = 0;
+const ALLOWED_USERS_CACHE_TTL = 30000; // 30 seconds
+
+let botTablesChecked = false;
+async function ensureBotManagementTablesExist() {
+    if (botTablesChecked) return;
+    try {
+        // 1. wh_bot_instances
+        const createBotInstancesSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_bot_instances\` (
+                \`session_id\` VARCHAR(50) NOT NULL PRIMARY KEY COMMENT 'Unique session identifier',
+                \`phone_number\` VARCHAR(25) DEFAULT NULL COMMENT 'WhatsApp phone number',
+                \`bot_name\` VARCHAR(100) NOT NULL COMMENT 'Display label',
+                \`menu_type\` VARCHAR(50) NOT NULL DEFAULT 'DOCUMENT_OCR' COMMENT 'DOCUMENT_OCR, CUSTOM_MENU, etc.',
+                \`is_active\` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1=Active, 0=Disabled',
+                \`connection_status\` VARCHAR(50) NOT NULL DEFAULT 'initializing',
+                \`last_connected_at\` TIMESTAMP NULL DEFAULT NULL,
+                \`last_qr_at\` TIMESTAMP NULL DEFAULT NULL,
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_is_active\` (\`is_active\`),
+                INDEX \`idx_phone_number\` (\`phone_number\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createBotInstancesSql);
+
+        // Seed default bots if table empty
+        const [botRows] = await pool.execute(`SELECT COUNT(*) as cnt FROM wh_bot_instances`);
+        if (botRows[0].cnt === 0) {
+            await pool.execute(`
+                INSERT INTO wh_bot_instances (session_id, phone_number, bot_name, menu_type, is_active)
+                VALUES 
+                ('bot_9610238234', '9610238234', 'Primary Registry OCR Scanner (9610238234)', 'DOCUMENT_OCR', 1),
+                ('bot_9079377715', '9079377715', 'Secondary Bot (9079377715)', 'CUSTOM_MENU', 1)
+            `);
+            console.log("✅ [Database] Seeded initial bot instances in 'wh_bot_instances'");
+        }
+
+        // 2. wh_allowed_users
+        const createAllowedUsersSql = `
+            CREATE TABLE IF NOT EXISTS \`wh_allowed_users\` (
+                \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+                \`mobile_number\` VARCHAR(25) NOT NULL UNIQUE COMMENT 'Sender mobile number',
+                \`user_name\` VARCHAR(100) DEFAULT NULL COMMENT 'Name / Role',
+                \`bot_session_id\` VARCHAR(50) NOT NULL DEFAULT 'all' COMMENT 'Allowed bot session or "all"',
+                \`allowed_features\` VARCHAR(255) NOT NULL DEFAULT 'all' COMMENT 'Allowed features e.g. "all", "ocr", "custom"',
+                \`is_active\` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1=Allowed, 0=Blocked',
+                \`notes\` TEXT DEFAULT NULL,
+                \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_mobile_number\` (\`mobile_number\`),
+                INDEX \`idx_bot_session\` (\`bot_session_id\`),
+                INDEX \`idx_is_active\` (\`is_active\`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `;
+        await pool.execute(createAllowedUsersSql);
+
+        // Seed default allowed numbers if empty
+        const [userRows] = await pool.execute(`SELECT COUNT(*) as cnt FROM wh_allowed_users`);
+        if (userRows[0].cnt === 0) {
+            await pool.execute(`
+                INSERT INTO wh_allowed_users (mobile_number, user_name, bot_session_id, allowed_features, is_active, notes)
+                VALUES 
+                ('919079377715', 'Akhilesh Mishra (Admin)', 'all', 'all', 1, 'Master Administrator'),
+                ('919610238234', 'Registry Scanner Operator', 'all', 'all', 1, 'OCR Scanner Operator')
+            `);
+            console.log("✅ [Database] Seeded default authorized numbers in 'wh_allowed_users'");
+        }
+
+        // 3. wh_baileys_auth session_id migration
+        try {
+            await pool.execute(`
+                CREATE TABLE IF NOT EXISTS \`wh_baileys_auth\` (
+                    \`session_id\` VARCHAR(50) NOT NULL DEFAULT 'default',
+                    \`id\` VARCHAR(255) NOT NULL,
+                    \`value\` LONGTEXT,
+                    PRIMARY KEY (\`session_id\`, \`id\`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            const [authCols] = await pool.execute(`SHOW COLUMNS FROM wh_baileys_auth`);
+            const colNames = authCols.map(c => c.Field);
+            if (!colNames.includes('session_id')) {
+                console.log("🔄 [Database] Migrating wh_baileys_auth to multi-session composite primary key...");
+                await pool.execute(`ALTER TABLE wh_baileys_auth ADD COLUMN \`session_id\` VARCHAR(50) NOT NULL DEFAULT 'default' FIRST`);
+                await pool.execute(`ALTER TABLE wh_baileys_auth DROP PRIMARY KEY, ADD PRIMARY KEY (\`session_id\`, \`id\`)`);
+                console.log("✅ [Database] wh_baileys_auth migrated successfully!");
+            }
+        } catch (authMigrateErr) {
+            console.warn("⚠️ [Database] wh_baileys_auth check notice:", authMigrateErr.message);
+        }
+
+        botTablesChecked = true;
+        console.log("✅ [Database] Checked/Migrated Bot Instances & Access Control Tables");
+    } catch (err) {
+        console.warn("⚠️ [Database] Bot management tables check warning:", err.message);
+    }
+}
+
+/**
+ * Normalizes phone numbers for comparison
+ */
+function getPhoneVariants(phone) {
+    if (!phone) return [];
+    const clean = String(phone).replace(/[^0-9]/g, '');
+    const variants = new Set();
+    if (clean) variants.add(clean);
+    if (clean.startsWith('91') && clean.length === 12) {
+        variants.add(clean.slice(2)); // 10-digit
+    } else if (clean.length === 10) {
+        variants.add(`91${clean}`); // 12-digit with 91
+    }
+    return Array.from(variants);
+}
+
+/**
+ * Checks if a sender mobile number is authorized in wh_allowed_users
+ */
+async function isSenderAllowed(senderMobile, sessionId = 'all') {
+    await ensureBotManagementTablesExist();
+
+    const now = Date.now();
+    if (!allowedUsersCache || (now - lastAllowedUsersFetch > ALLOWED_USERS_CACHE_TTL)) {
+        try {
+            const [rows] = await pool.execute(
+                `SELECT mobile_number, user_name, bot_session_id, allowed_features, is_active FROM wh_allowed_users`
+            );
+            allowedUsersCache = rows;
+            lastAllowedUsersFetch = now;
+        } catch (err) {
+            console.error("❌ [AccessControl] Failed to fetch wh_allowed_users:", err.message);
+            if (!allowedUsersCache) return { allowed: true, user: null };
+        }
+    }
+
+    if (!allowedUsersCache || allowedUsersCache.length === 0) {
+        return { allowed: true, user: null };
+    }
+
+    const variants = getPhoneVariants(senderMobile);
+
+    const match = allowedUsersCache.find(u => {
+        const uVariants = getPhoneVariants(u.mobile_number);
+        return variants.some(v => uVariants.includes(v));
+    });
+
+    if (!match) {
+        return {
+            allowed: false,
+            user: null,
+            reason: 'Number is not registered in authorized users whitelist.'
+        };
+    }
+
+    if (Number(match.is_active) !== 1) {
+        return {
+            allowed: false,
+            user: match,
+            reason: 'User account is currently suspended/blocked.'
+        };
+    }
+
+    if (match.bot_session_id && match.bot_session_id !== 'all' && sessionId !== 'all' && match.bot_session_id !== sessionId) {
+        return {
+            allowed: false,
+            user: match,
+            reason: `User is authorized only for bot ${match.bot_session_id}.`
+        };
+    }
+
+    return {
+        allowed: true,
+        user: match
+    };
+}
+
+/**
+ * Returns all active bot instances from wh_bot_instances
+ */
+async function getActiveBotInstances() {
+    await ensureBotManagementTablesExist();
+    try {
+        const [rows] = await pool.execute(
+            `SELECT * FROM wh_bot_instances WHERE is_active = 1 ORDER BY created_at ASC`
+        );
+        return rows;
+    } catch (err) {
+        console.error("❌ [Database] Failed to get active bot instances:", err.message);
+        return [];
+    }
+}
+
+/**
+ * Returns all allowed users for dashboard/diagnostics
+ */
+async function getAllowedUsersList() {
+    await ensureBotManagementTablesExist();
+    try {
+        const [rows] = await pool.execute(
+            `SELECT id, mobile_number, user_name, bot_session_id, allowed_features, is_active, notes, created_at, updated_at FROM wh_allowed_users ORDER BY id ASC`
+        );
+        return rows;
+    } catch (err) {
+        console.error("❌ [Database] Failed to get allowed users:", err.message);
+        return [];
+    }
+}
+
+/**
+ * Updates bot instance status in database
+ */
+async function updateBotStatus(sessionId, { status, phoneNumber, lastConnectedAt, lastQrAt }) {
+    await ensureBotManagementTablesExist();
+    try {
+        const updates = [];
+        const params = [];
+
+        if (status !== undefined) {
+            updates.push('`connection_status` = ?');
+            params.push(status);
+        }
+        if (phoneNumber !== undefined) {
+            updates.push('`phone_number` = ?');
+            params.push(phoneNumber);
+        }
+        if (lastConnectedAt !== undefined) {
+            updates.push('`last_connected_at` = ?');
+            params.push(lastConnectedAt ? new Date(lastConnectedAt) : new Date());
+        }
+        if (lastQrAt !== undefined) {
+            updates.push('`last_qr_at` = ?');
+            params.push(lastQrAt ? new Date(lastQrAt) : new Date());
+        }
+
+        if (updates.length === 0) return;
+
+        params.push(sessionId);
+        await pool.execute(
+            `UPDATE wh_bot_instances SET ${updates.join(', ')} WHERE session_id = ?`,
+            params
+        );
+    } catch (err) {
+        console.warn(`⚠️ [Database] Failed to update status for bot ${sessionId}:`, err.message);
+    }
+}
+
 module.exports = {
     logImageUpload,
     insertOrUpdateAadhaar,
     insertOrUpdatePan,
     insertJamabandiRecord,
-    insertSaleDeedRecord
+    insertSaleDeedRecord,
+    ensureBotManagementTablesExist,
+    isSenderAllowed,
+    getActiveBotInstances,
+    getAllowedUsersList,
+    updateBotStatus
 };
 

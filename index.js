@@ -26,19 +26,21 @@ const {
     insertOrUpdateAadhaar,
     insertOrUpdatePan,
     insertJamabandiRecord,
-    insertSaleDeedRecord
+    insertSaleDeedRecord,
+    ensureBotManagementTablesExist,
+    isSenderAllowed,
+    getActiveBotInstances,
+    getAllowedUsersList,
+    updateBotStatus
 } = require('./services/documentDbService');
+const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.3.5-SALEDEED-ROOT-SCHEMA";
+const APP_VERSION = "v5.4.0-MULTI-BOT-ACCESS-CONTROL";
 
-let sock = null;
-let currentBotNumber = "Unknown";
-let connectionStatus = "initializing";
-let lastConnectedAt = null;
-let lastQrGeneratedAt = null;
+const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
 
 function logEvent(type, message, data = null) {
@@ -54,56 +56,226 @@ function logEvent(type, message, data = null) {
 }
 
 // ---------------------------------------------------------
-// 2. EXPRESS HTTP SERVER (Cloud Run Entry & Diagnostics)
+// 2. EXPRESS HTTP SERVER & DASHBOARD
 // ---------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
 
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+    const sessionsList = [];
+    for (const [sId, info] of botSockets.entries()) {
+        sessionsList.push({
+            session_id: sId,
+            bot_name: info.botConfig?.bot_name || sId,
+            menu_type: info.botConfig?.menu_type || 'DOCUMENT_OCR',
+            bot_number: info.currentBotNumber || info.botConfig?.phone_number || 'Unknown',
+            status: info.connectionStatus || 'initializing',
+            is_ready: !!info.sock?.user,
+            last_connected: info.lastConnectedAt,
+            last_qr: info.lastQrGeneratedAt,
+            qr_link: `/qr/${sId}`
+        });
+    }
+
+    if (req.headers.accept && req.headers.accept.includes('application/json') && !req.query.html) {
+        return res.json({
+            service: 'Fabkraft Multi-Session WhatsApp Document AI & Uploader',
+            version: APP_VERSION,
+            server_status: 'online',
+            total_bots: sessionsList.length,
+            bots: sessionsList,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    // Modern HTML Web Dashboard
+    const rowsHtml = sessionsList.map(s => {
+        let badgeColor = s.status === 'connected' ? '#10b981' : (s.status.includes('qr') ? '#f59e0b' : '#ef4444');
+        return `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 12px; font-weight: bold;">${s.bot_name}</td>
+                <td style="padding: 12px; font-family: monospace;"><code>${s.session_id}</code></td>
+                <td style="padding: 12px;">+${s.bot_number}</td>
+                <td style="padding: 12px;"><span style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${s.menu_type}</span></td>
+                <td style="padding: 12px;">
+                    <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ${badgeColor}; margin-right: 6px;"></span>
+                    <strong style="color: ${badgeColor};">${s.status.toUpperCase()}</strong>
+                </td>
+                <td style="padding: 12px;">
+                    <a href="/qr/${s.session_id}" target="_blank" style="display: inline-block; background: #2563eb; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 13px;">📲 Scan QR</a>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Fabkraft WhatsApp Multi-Bot ERP Node</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }
+                .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 12px; padding: 28px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+                h1 { margin-top: 0; color: #0f172a; display: flex; align-items: center; justify-content: space-between; }
+                .badge { background: #dbeafe; color: #1e40af; font-size: 13px; font-weight: normal; padding: 4px 10px; border-radius: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; text-align: left; }
+                th { background: #f1f5f9; padding: 12px; font-size: 13px; color: #475569; text-transform: uppercase; }
+                .nav-links { margin-top: 24px; display: flex; gap: 12px; }
+                .nav-links a { color: #2563eb; text-decoration: none; font-size: 14px; font-weight: 500; }
+                .footer { margin-top: 30px; font-size: 13px; color: #94a3b8; text-align: center; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>
+                    <span>🤖 Fabkraft Multi-Bot ERP Node</span>
+                    <span class="badge">${APP_VERSION}</span>
+                </h1>
+                <p style="color: #64748b; margin-bottom: 20px;">Live WhatsApp Bot instances running concurrently on Google Cloud Run.</p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Bot Name</th>
+                            <th>Session ID</th>
+                            <th>Connected Number</th>
+                            <th>Menu Workflow</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHtml || '<tr><td colspan="6" style="padding: 20px; text-align: center;">No active bots initialized yet.</td></tr>'}
+                    </tbody>
+                </table>
+
+                <div class="nav-links">
+                    <a href="/allowed-users" target="_blank">🔐 View Allowed Numbers (Whitelist)</a>
+                    <a href="/logs" target="_blank">📜 Event Logs</a>
+                    <a href="/health" target="_blank">❤️ Server Health</a>
+                </div>
+
+                <div class="footer">
+                    Powered by FabKraft AI Engine &middot; MySQL Multi-Session Sync Active
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+
+    res.send(html);
+});
+
+// Browser QR Code Display for a specific Bot Session
+app.get('/qr/:sessionId', (req, res) => {
+    const sessionId = req.params.sessionId;
+    const sessionInfo = botSockets.get(sessionId);
+
+    if (!sessionInfo) {
+        return res.status(404).send(`<h3>❌ Bot Session '${sessionId}' not found.</h3><a href="/">Back to Dashboard</a>`);
+    }
+
+    const qrRaw = sessionInfo.qr;
+    const status = sessionInfo.connectionStatus;
+    const botName = sessionInfo.botConfig?.bot_name || sessionId;
+
+    const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Scan QR - ${botName}</title>
+            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+                .card { background: #1e293b; border-radius: 16px; padding: 32px; text-align: center; max-width: 420px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+                h2 { margin-top: 0; color: #38bdf8; }
+                #qrCanvas { background: white; padding: 16px; border-radius: 12px; margin: 20px auto; display: block; }
+                .status { margin-top: 15px; font-size: 14px; color: #94a3b8; }
+                .btn { display: inline-block; background: #38bdf8; color: #0f172a; font-weight: bold; padding: 10px 20px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>📲 ${botName}</h2>
+                <p style="color: #94a3b8; font-size: 14px;">Session: <code>${sessionId}</code></p>
+
+                ${status === 'connected' ? `
+                    <div style="padding: 40px 20px;">
+                        <div style="font-size: 50px;">✅</div>
+                        <h3 style="color: #4ade80;">Bot is Connected!</h3>
+                        <p style="color: #94a3b8;">Phone: +${sessionInfo.currentBotNumber || 'Connected'}</p>
+                    </div>
+                ` : (qrRaw ? `
+                    <canvas id="qrCanvas"></canvas>
+                    <script>
+                        QRCode.toCanvas(document.getElementById('qrCanvas'), "${qrRaw}", { width: 280 }, function (error) {
+                            if (error) console.error(error);
+                        });
+                    </script>
+                    <div class="status">Scan this QR Code in WhatsApp on your phone.<br>Auto-refreshing in 15s...</div>
+                    <script>setTimeout(() => location.reload(), 15000);</script>
+                ` : `
+                    <div style="padding: 40px 20px;">
+                        <div style="font-size: 40px;">⏳</div>
+                        <p>Generating QR Code... Status: <strong>${status}</strong></p>
+                    </div>
+                    <script>setTimeout(() => location.reload(), 4000);</script>
+                `)}
+
+                <div>
+                    <a href="/" class="btn">⬅ Dashboard</a>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+
+    res.send(html);
+});
+
+// Allowed Users / Whitelist API
+app.get('/allowed-users', async (req, res) => {
+    const users = await getAllowedUsersList();
     res.json({
-        service: 'Fabkraft WhatsApp Document AI & Uploader',
-        version: APP_VERSION,
-        ai_engine: 'Powered by FabKraft - AI',
-        server_status: 'online',
-        whatsapp_status: connectionStatus,
-        bot_number: currentBotNumber,
-        is_socket_ready: !!sock?.user,
-        last_connected: lastConnectedAt,
-        last_qr_generated: lastQrGeneratedAt,
-        timestamp: new Date().toISOString()
+        total: users.length,
+        allowed_users: users
     });
 });
 
 app.get('/logs', (req, res) => {
     res.json({
         version: APP_VERSION,
-        whatsapp_status: connectionStatus,
-        bot_number: currentBotNumber,
-        is_socket_ready: !!sock?.user,
         recent_events: eventLogs
     });
 });
 
 app.get('/send-test', async (req, res) => {
-    let targetMobile = req.query.to ? req.query.to.replace(/[^0-9]/g, "") : "919079377715";
-    if (targetMobile.length === 10) targetMobile = `91${targetMobile}`;
-    const text = req.query.text || "Hello from Fabkraft Cloud Run Bot!";
+    const sessionId = req.query.session || Array.from(botSockets.keys())[0];
+    const sessionInfo = botSockets.get(sessionId);
 
-    if (!sock || connectionStatus !== "connected") {
+    if (!sessionInfo || sessionInfo.connectionStatus !== 'connected' || !sessionInfo.sock) {
         return res.status(503).json({
             success: false,
-            error: "WhatsApp socket is currently not connected (Status: " + connectionStatus + ").",
-            status: connectionStatus
+            error: `Bot session '${sessionId}' is not connected.`,
+            status: sessionInfo?.connectionStatus || 'not_found'
         });
     }
 
+    let targetMobile = req.query.to ? req.query.to.replace(/[^0-9]/g, "") : "919079377715";
+    if (targetMobile.length === 10) targetMobile = `91${targetMobile}`;
+    const text = req.query.text || `Hello from Fabkraft Bot (${sessionInfo.botConfig?.bot_name || sessionId})!`;
+
     try {
         const jid = `${targetMobile}@s.whatsapp.net`;
-        logEvent("OUTGOING_TEST", `Sending test message to ${jid}`, { text });
-        await sock.sendMessage(jid, { text });
-        res.json({ success: true, message: `Sent test message to ${jid}` });
+        logEvent("OUTGOING_TEST", `Sending test message via ${sessionId} to ${jid}`, { text });
+        await sessionInfo.sock.sendMessage(jid, { text });
+        res.json({ success: true, session: sessionId, message: `Sent test message to ${jid}` });
     } catch (err) {
         logEvent("OUTGOING_TEST_ERROR", err.message);
         res.status(500).json({ success: false, error: err.message });
@@ -113,7 +285,7 @@ app.get('/send-test', async (req, res) => {
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 [Server] Cloud Run HTTP Listener active on 0.0.0.0:${PORT} (${APP_VERSION})`);
+    console.log(`🚀 [Server] Cloud Run Multi-Bot HTTP Listener active on 0.0.0.0:${PORT} (${APP_VERSION})`);
 });
 
 // ---------------------------------------------------------
@@ -254,26 +426,36 @@ function getMessageDetails(msg) {
 }
 
 // ---------------------------------------------------------
-// 4. WHATSAPP BOT ENGINE
+// 4. MULTI-SESSION BOT LIFECYCLE
 // ---------------------------------------------------------
-async function startBot() {
-    logEvent("WHATSAPP_INIT", `Starting WhatsApp Socket (${APP_VERSION}) with MySQL Auth State...`);
-    connectionStatus = "connecting";
+async function startBotSession(botConfig) {
+    const sessionId = botConfig.session_id;
+    logEvent("BOT_SESSION_INIT", `Initializing session '${sessionId}' (${botConfig.bot_name}) with menu '${botConfig.menu_type}'...`);
+
+    const sessionState = {
+        sock: null,
+        botConfig,
+        qr: null,
+        connectionStatus: "connecting",
+        lastConnectedAt: null,
+        lastQrGeneratedAt: null,
+        currentBotNumber: botConfig.phone_number || "Unknown"
+    };
+    botSockets.set(sessionId, sessionState);
 
     let authState, saveCreds;
     try {
-        const mySqlAuth = await useMySQLAuthState();
+        const mySqlAuth = await useMySQLAuthState(sessionId);
         authState = mySqlAuth.state;
         saveCreds = mySqlAuth.saveCreds;
-        logEvent("AUTH_SOURCE", "Using MySQL session (wh_baileys_auth)");
 
         if (authState?.creds?.me?.id) {
-            currentBotNumber = authState.creds.me.id.split(':')[0].replace(/[^0-9]/g, "");
-            logEvent("AUTH_CREDS", `Credentials loaded for: ${currentBotNumber}`);
+            sessionState.currentBotNumber = authState.creds.me.id.split(':')[0].replace(/[^0-9]/g, "");
+            logEvent("AUTH_CREDS", `[${sessionId}] Credentials loaded for bot number: ${sessionState.currentBotNumber}`);
         }
     } catch (authErr) {
-        logEvent("AUTH_ERROR", `MySQL Auth failed, fallback to local: ${authErr.message}`);
-        const fileAuth = await useMultiFileAuthState("./auth");
+        logEvent("AUTH_ERROR", `[${sessionId}] MySQL Auth failed, using local fallback: ${authErr.message}`);
+        const fileAuth = await useMultiFileAuthState(`./auth_${sessionId}`);
         authState = fileAuth.state;
         saveCreds = fileAuth.saveCreds;
     }
@@ -282,7 +464,7 @@ async function startBot() {
     const logger = P({ level: "silent" });
     logger.child = () => logger;
 
-    sock = makeWASocket({
+    const sock = makeWASocket({
         version,
         auth: authState,
         printQRInTerminal: true,
@@ -290,52 +472,69 @@ async function startBot() {
         keepAliveIntervalMs: 25000,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-        browser: ["Fabkraft Cloud Parser", "Chrome", "1.0"]
+        browser: ["Fabkraft Multi-Bot", "Chrome", "1.0"]
     });
+    sessionState.sock = sock;
 
     sock.ev.on("creds.update", async () => {
         try {
             await saveCreds();
-            logEvent("CREDS_UPDATED", "Credentials saved to MySQL");
+            logEvent("CREDS_UPDATED", `[${sessionId}] Credentials updated in MySQL`);
         } catch (e) {
-            logEvent("CREDS_SAVE_ERROR", e.message);
+            logEvent("CREDS_SAVE_ERROR", `[${sessionId}] ${e.message}`);
         }
     });
 
     sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
         if (qr) {
-            connectionStatus = "waiting_for_qr_scan";
-            lastQrGeneratedAt = new Date().toISOString();
-            logEvent("QR_GENERATED", "QR code waiting for scan");
+            sessionState.qr = qr;
+            sessionState.connectionStatus = "waiting_for_qr_scan";
+            sessionState.lastQrGeneratedAt = new Date().toISOString();
+            logEvent("QR_GENERATED", `[${sessionId}] QR code generated. View at: /qr/${sessionId}`);
             qrcode.generate(qr, { small: true });
+
+            await updateBotStatus(sessionId, {
+                status: 'waiting_for_qr_scan',
+                lastQrAt: sessionState.lastQrGeneratedAt
+            });
         }
 
         if (connection === "open") {
-            connectionStatus = "connected";
-            lastConnectedAt = new Date().toISOString();
-            currentBotNumber = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, "") : currentBotNumber;
-            logEvent("CONNECTED", `WhatsApp Connected Successfully! Bot: ${currentBotNumber}`);
+            sessionState.qr = null;
+            sessionState.connectionStatus = "connected";
+            sessionState.lastConnectedAt = new Date().toISOString();
+            sessionState.currentBotNumber = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, "") : sessionState.currentBotNumber;
+            logEvent("CONNECTED", `[${sessionId}] WhatsApp Connected Successfully! Bot Number: ${sessionState.currentBotNumber}`);
+
+            await updateBotStatus(sessionId, {
+                status: 'connected',
+                phoneNumber: sessionState.currentBotNumber,
+                lastConnectedAt: sessionState.lastConnectedAt
+            });
         }
 
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            connectionStatus = shouldReconnect ? "disconnected_reconnecting" : "logged_out";
-            logEvent("DISCONNECTED", `Connection closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`, {
+            sessionState.connectionStatus = shouldReconnect ? "disconnected_reconnecting" : "logged_out";
+            logEvent("DISCONNECTED", `[${sessionId}] Connection closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`, {
                 error: lastDisconnect?.error?.message
             });
 
+            await updateBotStatus(sessionId, {
+                status: sessionState.connectionStatus
+            });
+
             if (shouldReconnect) {
-                setTimeout(startBot, 3000);
+                setTimeout(() => startBotSession(botConfig), 4000);
             } else {
-                logEvent("LOGGED_OUT", "Logged out. Please scan QR code again.");
+                logEvent("LOGGED_OUT", `[${sessionId}] Logged out. Scan QR again at: /qr/${sessionId}`);
             }
         }
     });
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
-            // Ignore offline history sync dumps
             if (type !== "notify") return;
 
             const nowSeconds = Math.floor(Date.now() / 1000);
@@ -346,7 +545,6 @@ async function startBot() {
                 const senderJid = msg.key.remoteJid;
                 if (!senderJid) continue;
 
-                // NEVER touch groups, broadcasts, newsletters
                 if (
                     senderJid.endsWith('@g.us') || 
                     senderJid.endsWith('@broadcast') || 
@@ -356,7 +554,6 @@ async function startBot() {
                     continue;
                 }
 
-                // Ignore messages older than 10 seconds
                 const msgTimestamp = typeof msg.messageTimestamp === 'number' 
                     ? msg.messageTimestamp 
                     : (msg.messageTimestamp?.low || 0);
@@ -368,39 +565,25 @@ async function startBot() {
                 const { text, isMedia, isImage, isPdf, mimeType, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
 
-                // Prevent bot infinite reply loops
-                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *') || text.startsWith('🪪 *') || text.startsWith('💳 *')) {
+                if (text.startsWith('✅ *') || text.startsWith('⏳ *') || text.startsWith('👋 *') || text.startsWith('🤖 *') || text.startsWith('❌ *') || text.startsWith('🪪 *') || text.startsWith('💳 *') || text.startsWith('⚠️ *')) {
                     continue;
-                }
-
-                // Command Triggers: Aadhaar (A), PAN (P), Jamabandi (J), Sale Deed (S)
-                const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
-                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
-                const isJamabandiTag = /^(j|jamabandi|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("जमाबंदी");
-                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
-                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
-
-                if (msg.key.fromMe) {
-                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) || (isExactGreeting && !isMedia))) {
-                        continue;
-                    }
                 }
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg);
 
-                logEvent("LIVE_MESSAGE", `From: ${senderMobile} | Text: "${text}" | Media: ${isMedia} (${mimeType})`);
-
-                // 1. Strict Greeting only
-                if (isExactGreeting && !isMedia) {
-                    logEvent("MENU_REPLY", `Sending menu to ${senderMobile}`);
-                    await sendMenuResponse(sock, senderJid, msg);
+                // ---------------------------------------------------------
+                // ACCESS CONTROL LAYER (WH_ALLOWED_USERS WHITELIST CHECK)
+                // ---------------------------------------------------------
+                const authCheck = await isSenderAllowed(senderMobile, sessionId);
+                if (!authCheck.allowed) {
+                    logEvent("ACCESS_DENIED", `Blocked sender ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
+                    await sock.sendMessage(senderJid, {
+                        text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
+                    }, { quoted: msg });
                     continue;
                 }
 
-                // 2. Document Processing (ONLY if caption has aadhar/a, pan/p, jamabandi/j, or sale_deed/s)
-                if (!isAadhaarTag && !isPanTag && !isJamabandiTag && !isSaleDeedTag) {
-                    continue;
-                }
+                logEvent("LIVE_MESSAGE", `[${sessionId}] From: ${senderMobile} (${authCheck.user?.user_name || 'User'}) | Text: "${text}" | Media: ${isMedia}`);
 
                 let targetMsgObj = msg;
                 let quotedRef = null;
@@ -417,29 +600,86 @@ async function startBot() {
                     quotedRef = msg;
                 }
 
+                // ---------------------------------------------------------
+                // ROUTE ACCORDING TO BOT MENU TYPE
+                // ---------------------------------------------------------
+                if (botConfig.menu_type === 'CUSTOM_MENU') {
+                    await handleCustomMenuFlow({
+                        sock,
+                        botConfig,
+                        msg: targetMsgObj,
+                        senderMobile,
+                        replyJid: senderJid,
+                        textMessage: text,
+                        quotedRef
+                    });
+                    continue;
+                }
+
+                // Default / DOCUMENT_OCR Menu Workflow:
+                const isAadhaarTag = /^(a|aadhar|adhar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar");
+                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
+                const isJamabandiTag = /^(j|jamabandi|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("जमाबंदी");
+                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start)$/i.test(captionText);
+
+                if (msg.key.fromMe) {
+                    if (!((isMedia && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) || (isExactGreeting && !isMedia))) {
+                        continue;
+                    }
+                }
+
+                if (isExactGreeting && !isMedia) {
+                    logEvent("MENU_REPLY", `Sending OCR menu to ${senderMobile}`);
+                    await sendMenuResponse(sock, senderJid, msg, sessionState.currentBotNumber);
+                    continue;
+                }
+
+                if (!isAadhaarTag && !isPanTag && !isJamabandiTag && !isSaleDeedTag) {
+                    if (!isMedia) {
+                        await sock.sendMessage(senderJid, {
+                            text: `🤖 Welcome! Send document scan (Aadhaar, PAN, Jamabandi, Sale Deed) with caption *a*, *p*, *j*, or *s*, or type *menu* for help.`
+                        }, { quoted: msg });
+                    }
+                    continue;
+                }
+
                 if (isMedia && isAadhaarTag) {
-                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                    await handleAadhaarGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isMedia && isPanTag) {
-                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isMedia && isJamabandiTag) {
-                    await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                    await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isMedia && isSaleDeedTag) {
-                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType);
+                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 }
             }
         } catch (err) {
-            logEvent("MESSAGE_UPSERT_ERROR", err.message);
+            logEvent("MESSAGE_UPSERT_ERROR", `[${sessionId}] ${err.message}`);
         }
     });
 }
 
 /**
- * Sends a helpful menu guide to the user with Version ID
+ * Initializes all active bot instances configured in MySQL
  */
-async function sendMenuResponse(sock, replyJid, quotedMsg) {
+async function startAllBots() {
+    await ensureBotManagementTablesExist();
+    const activeBots = await getActiveBotInstances();
+    console.log(`🤖 [MultiBotManager] Found ${activeBots.length} active bot configurations in database.`);
+
+    for (const bot of activeBots) {
+        startBotSession(bot);
+    }
+}
+
+/**
+ * Sends a helpful OCR menu guide to the user
+ */
+async function sendMenuResponse(sock, replyJid, quotedMsg, botNumber = "Unknown") {
     const menuText = 
         `*Welcome to Fabkraft Document Assistant*\n` +
-        `*Build Version:* \`${APP_VERSION}\`\n\n` +
+        `*Bot Line:* +${botNumber} &middot; \`${APP_VERSION}\`\n\n` +
         `Send your document image or PDF with the appropriate caption to extract data & save automatically:\n\n` +
         `*Aadhaar Card:*\n` +
         `• Caption: *a* or *aadhar*\n` +
@@ -463,10 +703,10 @@ async function sendMenuResponse(sock, replyJid, quotedMsg) {
 }
 
 /**
- * Handles Aadhaar Upload (Image/PDF) + Gemini Structured AI Extraction
+ * Handles Aadhaar Upload + AI Extraction
  */
-async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
-    logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with Gemini for ${senderMobile}...`);
+async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+    logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with AI for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `Aadhaar Card detected. Extracting details and saving...`
@@ -484,7 +724,6 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
         const fileName = `aadhar_${senderMobile}_${timestamp}.${ext}`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'aadhar', mimeType),
             extractAadhaarWithGemini(buffer, mimeType)
@@ -497,7 +736,6 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
         const uploadUri = uploadResult.uploadUri;
         const details = geminiResult.data || {};
 
-        // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
@@ -509,10 +747,7 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
         const tokens = geminiResult.tokens || { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 };
         const accuracy = geminiResult.accuracy || { overall: 100, aadhaarNumber: 100, fullName_English: 100, fullName_Hindi: 100, dob: 100, pincode: 100 };
 
-        let dbResult = null;
-
-        // 3. Upsert into wh_aadhaar_card_records with intelligent Front/Back merging
-        dbResult = await insertOrUpdateAadhaar({
+        const dbResult = await insertOrUpdateAadhaar({
             uploadId,
             aadharNumber: details.aadharNumber,
             virtualId: details.vidNumber,
@@ -604,10 +839,10 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
 }
 
 /**
- * Handles PAN Upload (Image/PDF) + Gemini Structured AI Extraction
+ * Handles PAN Upload + AI Extraction
  */
-async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
-    logEvent("PAN_START", `Processing PAN (${mimeType}) with Gemini for ${senderMobile}...`);
+async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+    logEvent("PAN_START", `Processing PAN (${mimeType}) with AI for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `PAN Card detected. Extracting details and saving...`
@@ -625,7 +860,6 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
         const fileName = `pan_${senderMobile}_${timestamp}.${ext}`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'pan', mimeType),
             extractPanWithGemini(buffer, mimeType)
@@ -638,7 +872,6 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
         const uploadUri = uploadResult.uploadUri;
         const details = geminiResult.data || {};
 
-        // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
@@ -647,7 +880,6 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
             uploadUri: uploadUri
         });
 
-        // 3. Upsert into wh_pan_card_records
         let panResult = null;
         if (details.panNumber && details.panNumber !== "Not Found") {
             panResult = await insertOrUpdatePan({
@@ -688,10 +920,10 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
 }
 
 /**
- * Handles Jamabandi Upload (Image/PDF) + Gemini Universal Property Registry Extraction
+ * Handles Jamabandi Upload + AI Extraction
  */
-async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
-    logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with Gemini for ${senderMobile}...`);
+async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+    logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with AI for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
         text: `Jamabandi Document detected. Extracting land records and saving...`
@@ -709,7 +941,6 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
         const fileName = `jamabandi_${senderMobile}_${timestamp}.${ext}`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with Gemini
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'jamabandi', mimeType),
             extractJamabandiWithGemini(buffer, mimeType)
@@ -726,7 +957,6 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
 
         const docId = details.khataNoNew ? `KHATA-${details.khataNoNew}` : `DOC${timestamp.toString().slice(-6)}`;
 
-        // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
@@ -735,7 +965,6 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
             uploadUri: uploadUri
         });
 
-        // 3. Insert record into wh_old_jamabandi_records
         const jbResult = await insertJamabandiRecord({
             uploadId,
             formName: details.formName,
@@ -806,9 +1035,9 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
 }
 
 /**
- * Handles Sale Deed Upload (Image/PDF) + Universal Property Registry AI Extraction
+ * Handles Sale Deed Upload + AI Extraction
  */
-async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg') {
+async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
     logEvent("SALEDEED_START", `Processing Sale Deed (${mimeType}) with AI for ${senderMobile}...`);
 
     await sock.sendMessage(replyJid, {
@@ -827,7 +1056,6 @@ async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobil
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
         const fileName = `saledeed_${senderMobile}_${timestamp}.${ext}`;
 
-        // 1. Parallel Execution: Upload to Fabkraft & Extract with AI
         const [uploadResult, geminiResult] = await Promise.all([
             uploadToFabkraft(buffer, fileName, 'saledeed', mimeType),
             extractSaleDeedWithGemini(buffer, mimeType)
@@ -844,7 +1072,6 @@ async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobil
 
         const docId = details.deed_number ? `DEED-${details.deed_number}` : `DOC${timestamp.toString().slice(-6)}`;
 
-        // 2. Insert record into wh_uploads
         const uploadId = await logImageUpload({
             receiverMobile: currentBotNumber,
             senderMobile: senderMobile,
@@ -859,7 +1086,6 @@ async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobil
         const seller = details.seller || {};
         const buyer = details.buyer || {};
 
-        // 3. Insert record into wh_sale_deed_records
         const sdResult = await insertSaleDeedRecord({
             uploadId,
             documentType: details.document_type || 'Sale Deed',
@@ -945,5 +1171,9 @@ async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobil
     }
 }
 
-// Start WhatsApp Bot
-startBot();
+// ---------------------------------------------------------
+// 5. BOOTSTRAP ALL CONFIGURED BOT SESSIONS
+// ---------------------------------------------------------
+startAllBots().catch(err => {
+    console.error("❌ [Main] Error starting bot sessions:", err);
+});

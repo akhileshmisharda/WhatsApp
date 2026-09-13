@@ -84,13 +84,15 @@ CREATE TABLE IF NOT EXISTS `wh_pan_card_records` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------------------
--- 4. WhatsApp Session Auth State Table (For Cloud Run persistence)
--- Stores Baileys credentials and encryption keys in MySQL
+-- 4. WhatsApp Multi-Session Auth State Table (For Cloud Run persistence)
+-- Stores Baileys credentials and encryption keys isolated per session_id
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `wh_baileys_auth` (
-    `id` VARCHAR(255) NOT NULL PRIMARY KEY,
+    `session_id` VARCHAR(50) NOT NULL DEFAULT 'default',
+    `id` VARCHAR(255) NOT NULL,
     `value` LONGTEXT NOT NULL,
-    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`session_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------------------
@@ -196,4 +198,39 @@ CREATE TABLE IF NOT EXISTS `wh_sale_deed_records` (
     INDEX `idx_sender_mobile` (`sender_mobile`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------------------
+-- 7. WhatsApp Bot Instances Configuration Table (Multi-Scanner Nodes)
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `wh_bot_instances` (
+    `session_id` VARCHAR(50) NOT NULL PRIMARY KEY COMMENT 'Unique session identifier (e.g. bot_9610238234, bot_9079377715)',
+    `phone_number` VARCHAR(25) DEFAULT NULL COMMENT 'Connected WhatsApp phone number',
+    `bot_name` VARCHAR(100) NOT NULL COMMENT 'Display label for dashboard',
+    `menu_type` VARCHAR(50) NOT NULL DEFAULT 'DOCUMENT_OCR' COMMENT 'Assigned workflow: DOCUMENT_OCR, CUSTOM_MENU, SALES_MENU',
+    `is_active` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1 = Run socket, 0 = Disabled',
+    `connection_status` VARCHAR(50) NOT NULL DEFAULT 'initializing',
+    `last_connected_at` TIMESTAMP NULL DEFAULT NULL,
+    `last_qr_at` TIMESTAMP NULL DEFAULT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_is_active` (`is_active`),
+    INDEX `idx_phone_number` (`phone_number`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------------------
+-- 8. Authorized Users Whitelist & Access Control Table
+-- Stores numbers allowed to communicate with the bots
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `wh_allowed_users` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `mobile_number` VARCHAR(25) NOT NULL UNIQUE COMMENT 'Sender mobile number (e.g. 919079377715)',
+    `user_name` VARCHAR(100) DEFAULT NULL COMMENT 'Name or designation of authorized user',
+    `bot_session_id` VARCHAR(50) NOT NULL DEFAULT 'all' COMMENT 'Allowed bot session or "all"',
+    `allowed_features` VARCHAR(255) NOT NULL DEFAULT 'all' COMMENT 'Allowed features e.g. "all", "ocr", "custom"',
+    `is_active` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1 = Allowed / Active, 0 = Blocked / Suspended',
+    `notes` TEXT DEFAULT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_mobile_number` (`mobile_number`),
+    INDEX `idx_bot_session` (`bot_session_id`),
+    INDEX `idx_is_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
