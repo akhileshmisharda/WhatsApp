@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.1-FIX-SELF-CHAT-LID-TRIGGER";
+const APP_VERSION = "v5.5.2-SAFE-RECONNECT-DELIVERY";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -790,18 +790,18 @@ async function startBotSession(botConfig) {
                 if (isExactGreeting && !isMedia) {
                     console.log(`🚀 [${sessionId}] Sending OCR menu to ${senderMobile}...`);
                     logEvent("MENU_REPLY", `Sending OCR menu to ${senderMobile}`);
-                    await sendMenuResponse(sock, replyJid, msg, sessionState.currentBotNumber);
+                    await sendMenuResponse(sessionId, sock, replyJid, msg, sessionState.currentBotNumber);
                     continue;
                 }
 
                 if (isAadhaarTag) {
-                    await handleAadhaarGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleAadhaarGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isPanTag) {
-                    await handlePanGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handlePanGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isJamabandiTag) {
-                    await handleJamabandiGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleJamabandiGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isSaleDeedTag) {
-                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleSaleDeedGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 }
             }
         } catch (err) {
@@ -825,9 +825,40 @@ async function startAllBots() {
 }
 
 /**
+ * Reliably sends a message, retrying if the socket is temporarily reconnecting
+ */
+async function safeSendMessage(sessionId, fallbackSock, jid, content, options = {}) {
+    let attempts = 0;
+    while (attempts < 5) {
+        attempts++;
+        const activeSock = (sessionId && botSockets.get(sessionId)?.sock) || fallbackSock;
+        try {
+            if (!activeSock) throw new Error("No active socket available");
+            return await activeSock.sendMessage(jid, content, options);
+        } catch (err) {
+            const isConnIssue = err.message?.includes('Connection Closed') || 
+                                err.message?.includes('closed') || 
+                                err.output?.statusCode === 428 ||
+                                err.output?.statusCode === 440;
+            if (isConnIssue && attempts < 5) {
+                console.log(`⏳ [${sessionId || 'Bot'}] Socket reconnecting, waiting 2s to retry delivery (Attempt ${attempts}/5)...`);
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+            if (options?.quoted) {
+                try {
+                    return await activeSock.sendMessage(jid, content);
+                } catch (e2) {}
+            }
+            throw err;
+        }
+    }
+}
+
+/**
  * Sends a helpful OCR menu guide to the user
  */
-async function sendMenuResponse(sock, replyJid, quotedMsg, botNumber = "Unknown") {
+async function sendMenuResponse(sessionId, sock, replyJid, quotedMsg, botNumber = "Unknown") {
     const menuText = 
         `*Welcome to Fabkraft Document Assistant*\n` +
         `*Bot Line:* +${botNumber} &middot; \`${APP_VERSION}\`\n\n` +
@@ -850,20 +881,16 @@ async function sendMenuResponse(sock, replyJid, quotedMsg, botNumber = "Unknown"
         `• Extracted: Deed No, Registration Date, SRO, Property Details, Area/Rakba, Boundaries, Consideration/Cheque, Seller & Buyer Details\n\n` +
         `Powered by FabKraft AI`;
 
-    try {
-        await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
-    } catch (e) {
-        await sock.sendMessage(replyJid, { text: menuText });
-    }
+    await safeSendMessage(sessionId, sock, replyJid, { text: menuText }, { quoted: quotedMsg });
 }
 
 /**
  * Handles Aadhaar Upload + AI Extraction
  */
-async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
     logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with AI for ${senderMobile}...`);
 
-    await sock.sendMessage(replyJid, {
+    await safeSendMessage(sessionId, sock, replyJid, {
         text: `Aadhaar Card detected. Extracting details and saving...`
     }, { quoted: quotedRef || mediaMsgObj });
 
@@ -919,12 +946,12 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
             addressEnglish: details.addressEnglish,
             addressHindi: details.addressHindi,
             pincode: details.pincode,
-            rawJson: geminiResult.rawJson || geminiResult.aadhaar_card_data,
+            rawJson: geminiResult.rawJson,
             detectedSide: geminiResult.detectedSide,
             tokensPrompt: tokens.promptTokens,
             tokensCompletion: tokens.candidatesTokens,
             tokensTotal: tokens.totalTokens,
-            aiModel: geminiResult.model || geminiResult.engine,
+            aiModel: geminiResult.model,
             accuracyOverall: accuracy.overall,
             accuracyAadhaarNumber: accuracy.aadhaarNumber,
             accuracyNameEnglish: accuracy.fullName_English,
@@ -933,15 +960,14 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
             accuracyPincode: accuracy.pincode,
             senderMobile: senderMobile,
             receiverMobile: currentBotNumber,
-            uploadUri: uploadUri
+            documentUri: uploadUri,
+            mimeType: mimeType
         });
 
-        const { ensureBilingualName } = require('./services/transliterate');
-        const bName = ensureBilingualName(details.nameEnglish, details.nameHindi);
-        const bFather = ensureBilingualName(details.fatherNameEnglish, details.fatherNameHindi);
-        const bHusband = ensureBilingualName(details.husbandNameEnglish, details.husbandNameHindi);
-
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
+        const bName = details.bilingualName || { english: details.nameEnglish, hindi: details.nameHindi };
+        const bFather = details.bilingualFatherName || { english: details.fatherNameEnglish, hindi: details.fatherNameHindi };
+        const bHusband = details.bilingualHusbandName || { english: details.husbandNameEnglish, hindi: details.husbandNameHindi };
 
         let relationLine = "";
         if (details.relationStatus && details.relationStatus !== "Not Found") {
@@ -981,13 +1007,13 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
             `*Accuracy Score:* ${accuracy.overall}%\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        await safeSendMessage(sessionId, sock, replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("AADHAAR_SUCCESS", `Aadhaar processed with Record ID #${recordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("AADHAAR_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         const userMsg = sanitizeUserFacingError(err);
-        await sock.sendMessage(replyJid, {
+        await safeSendMessage(sessionId, sock, replyJid, {
             text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
@@ -996,10 +1022,10 @@ async function handleAadhaarGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile
 /**
  * Handles PAN Upload + AI Extraction
  */
-async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
     logEvent("PAN_START", `Processing PAN (${mimeType}) with AI for ${senderMobile}...`);
 
-    await sock.sendMessage(replyJid, {
+    await safeSendMessage(sessionId, sock, replyJid, {
         text: `PAN Card detected. Extracting details and saving...`
     }, { quoted: quotedRef || mediaMsgObj });
 
@@ -1062,13 +1088,13 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
             `*PAN Number:* ${displayVal(details.panNumber)}\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        await safeSendMessage(sessionId, sock, replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("PAN_SUCCESS", `PAN processed with Record ID #${panRecordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("PAN_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         const userMsg = sanitizeUserFacingError(err);
-        await sock.sendMessage(replyJid, {
+        await safeSendMessage(sessionId, sock, replyJid, {
             text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
@@ -1077,10 +1103,10 @@ async function handlePanGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, qu
 /**
  * Handles Jamabandi Upload + AI Extraction
  */
-async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
     logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with AI for ${senderMobile}...`);
 
-    await sock.sendMessage(replyJid, {
+    await safeSendMessage(sessionId, sock, replyJid, {
         text: `Jamabandi Document detected. Extracting land records and saving...`
     }, { quoted: quotedRef || mediaMsgObj });
 
@@ -1177,13 +1203,13 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
             `*Accuracy Score:* ${accuracy}%\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        await safeSendMessage(sessionId, sock, replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("JAMABANDI_SUCCESS", `Jamabandi processed with Record ID #${jamabandiRecordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("JAMABANDI_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         const userMsg = sanitizeUserFacingError(err);
-        await sock.sendMessage(replyJid, {
+        await safeSendMessage(sessionId, sock, replyJid, {
             text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
@@ -1192,10 +1218,10 @@ async function handleJamabandiGeminiFlow(sock, mediaMsgObj, replyJid, senderMobi
 /**
  * Handles Sale Deed Upload + AI Extraction
  */
-async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
+async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
     logEvent("SALEDEED_START", `Processing Sale Deed (${mimeType}) with AI for ${senderMobile}...`);
 
-    await sock.sendMessage(replyJid, {
+    await safeSendMessage(sessionId, sock, replyJid, {
         text: `Sale Deed Document detected. Extracting registry details and saving...`
     }, { quoted: quotedRef || mediaMsgObj });
 
@@ -1314,13 +1340,13 @@ async function handleSaleDeedGeminiFlow(sock, mediaMsgObj, replyJid, senderMobil
             `*Accuracy Score:* ${accuracy}%\n\n` +
             `Powered by FabKraft AI`;
 
-        await sock.sendMessage(replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
+        await safeSendMessage(sessionId, sock, replyJid, { text: replyText }, { quoted: quotedRef || mediaMsgObj });
         logEvent("SALEDEED_SUCCESS", `Sale Deed processed with Record ID #${saleDeedRecordId} for ${senderMobile}`);
 
     } catch (err) {
         logEvent("SALEDEED_ERROR", `Failed for ${senderMobile}: ${err.message}`);
         const userMsg = sanitizeUserFacingError(err);
-        await sock.sendMessage(replyJid, {
+        await safeSendMessage(sessionId, sock, replyJid, {
             text: `Processing Failed: ${userMsg}`
         }, { quoted: quotedRef || mediaMsgObj });
     }
