@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.4-RETRY-DOWNLOAD-AADHAAR-MERGE";
+const APP_VERSION = "v5.5.5-FULL-AADHAAR-BACK-AND-MERGE";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -987,26 +987,38 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
             mimeType: mimeType
         });
 
-        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
-        const bName = details.bilingualName || { english: details.nameEnglish, hindi: details.nameHindi };
-        const bFather = details.bilingualFatherName || { english: details.fatherNameEnglish, hindi: details.fatherNameHindi };
-        const bHusband = details.bilingualHusbandName || { english: details.husbandNameEnglish, hindi: details.husbandNameHindi };
+        const rec = dbResult?.record || {};
+        const finalNameEng = rec.name_english || details.nameEnglish || (details.bilingualName?.english);
+        const finalNameHin = rec.name_hindi || details.nameHindi || (details.bilingualName?.hindi);
+        const finalFatherEng = rec.father_name_english || details.fatherNameEnglish || (details.bilingualFatherName?.english);
+        const finalFatherHin = rec.father_name_hindi || details.fatherNameHindi || (details.bilingualFatherName?.hindi);
+        const finalHusbandEng = rec.husband_name_english || details.husbandNameEnglish || (details.bilingualHusbandName?.english);
+        const finalHusbandHin = rec.husband_name_hindi || details.husbandNameHindi || (details.bilingualHusbandName?.hindi);
+        const finalDob = rec.dob || details.dob;
+        const finalGender = rec.gender_english || details.genderEnglish || details.gender;
+        const finalAadhaar = rec.aadhar_number || details.aadharNumber;
+        const finalVid = rec.virtual_id || details.vidNumber;
+        const finalAddress = rec.address_english || details.addressEnglish;
+        const finalPincode = rec.pincode || details.pincode;
+        const finalRelation = rec.relation_status || details.relationStatus;
+
+        const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found" && !String(val).startsWith("DOC")) ? val : "Not Found";
 
         let relationLine = "";
-        if (details.relationStatus && details.relationStatus !== "Not Found") {
-            relationLine += `*Relation Status:* ${details.relationStatus}\n`;
+        if (finalRelation && finalRelation !== "Not Found") {
+            relationLine += `*Relation Status:* ${finalRelation}\n`;
         }
-        if (bFather.english !== "Not Found") {
-            relationLine += `*Father's Name (English):* ${bFather.english}\n`;
+        if (finalFatherEng && finalFatherEng !== "Not Found") {
+            relationLine += `*Father's Name (English):* ${finalFatherEng}\n`;
         }
-        if (bFather.hindi !== "Not Found") {
-            relationLine += `*Father's Name (Hindi):* ${bFather.hindi}\n`;
+        if (finalFatherHin && finalFatherHin !== "Not Found") {
+            relationLine += `*Father's Name (Hindi):* ${finalFatherHin}\n`;
         }
-        if (bHusband.english !== "Not Found") {
-            relationLine += `*Husband's Name (English):* ${bHusband.english}\n`;
+        if (finalHusbandEng && finalHusbandEng !== "Not Found") {
+            relationLine += `*Husband's Name (English):* ${finalHusbandEng}\n`;
         }
-        if (bHusband.hindi !== "Not Found") {
-            relationLine += `*Husband's Name (Hindi):* ${bHusband.hindi}\n`;
+        if (finalHusbandHin && finalHusbandHin !== "Not Found") {
+            relationLine += `*Husband's Name (Hindi):* ${finalHusbandHin}\n`;
         }
 
         const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side' : 'Front Side');
@@ -1018,15 +1030,15 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
             `*Record ID:* #${recordId}\n` +
             `*Document Scan:* ${sideLabel}\n` +
             `*Sent By:* ${senderMobile}\n\n` +
-            `*Name (English):* ${displayVal(bName.english)}\n` +
-            `*Name (Hindi):* ${displayVal(bName.hindi)}\n` +
+            `*Name (English):* ${displayVal(finalNameEng)}\n` +
+            `*Name (Hindi):* ${displayVal(finalNameHin)}\n` +
             relationLine +
-            `*DOB / YOB:* ${displayVal(details.dob)}\n` +
-            `*Gender:* ${displayVal(details.genderEnglish)}\n` +
-            `*Aadhaar Number:* ${displayVal(details.aadharNumber)}\n` +
-            `*Virtual ID (VID):* ${displayVal(details.vidNumber)}\n` +
-            `*Address:* ${displayVal(details.addressEnglish)}\n` +
-            `*PIN Code:* ${displayVal(details.pincode)}\n` +
+            `*DOB / YOB:* ${displayVal(finalDob)}\n` +
+            `*Gender:* ${displayVal(finalGender)}\n` +
+            `*Aadhaar Number:* ${displayVal(finalAadhaar)}\n` +
+            `*Virtual ID (VID):* ${displayVal(finalVid)}\n` +
+            `*Address:* ${displayVal(finalAddress)}\n` +
+            `*PIN Code:* ${displayVal(finalPincode)}\n` +
             `*Accuracy Score:* ${accuracy.overall}%\n\n` +
             `Powered by FabKraft AI`;
 

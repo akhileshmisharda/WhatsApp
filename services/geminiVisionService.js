@@ -146,7 +146,8 @@ Strict Rules:
       "document_type": "aadhaar_card",
       "detected_side": "front",
       "aadhaar_card_data": {
-        "aadhaarNumber": "XXXX XXXX XXXX or empty string if not visible or on back side",
+        "aadhaarNumber": "12-digit Aadhaar number formatted as 'XXXX XXXX XXXX' (Look at front or bottom of card/back side). Empty only if not present. Do NOT extract helpline 1947.",
+        "vidNumber": "16-digit Virtual ID formatted as 'XXXX XXXX XXXX XXXX' if present (e.g., after 'VID :' on front or back).",
         "fullName_English": "Full name in English exactly as printed or empty string",
         "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or empty string",
         "dob": "DD/MM/YYYY or YYYY or empty string",
@@ -274,16 +275,24 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 else detectedSide = "both";
             }
 
-            // Strictly filter out back-side fake Aadhaar numbers
-            if (detectedSide === "back" || (cardData.aadhaarNumber && (cardData.aadhaarNumber.includes("1947") || cardData.aadhaarNumber.includes("1800")))) {
-                cardData.aadhaarNumber = "";
-            }
-
+            // Extract 12-digit Aadhaar number
             let cleanCardAadhaar = "Not Found";
-            if (detectedSide !== "back" && cardData.aadhaarNumber) {
+            if (cardData.aadhaarNumber) {
                 const rawDigits = String(cardData.aadhaarNumber).replace(/\D/g, '');
                 if (rawDigits.length === 12 && !rawDigits.startsWith("1947") && !rawDigits.startsWith("1800")) {
                     cleanCardAadhaar = `${rawDigits.slice(0, 4)} ${rawDigits.slice(4, 8)} ${rawDigits.slice(8, 12)}`;
+                }
+            }
+
+            // Extract 16-digit VID (Virtual ID)
+            let cleanCardVid = "Not Found";
+            const rawVid = cardData.vidNumber || cardData.virtualId || cardData.vid || "";
+            if (rawVid) {
+                const vidDigits = String(rawVid).replace(/\D/g, '');
+                if (vidDigits.length === 16) {
+                    cleanCardVid = `${vidDigits.slice(0, 4)} ${vidDigits.slice(4, 8)} ${vidDigits.slice(8, 12)} ${vidDigits.slice(12, 16)}`;
+                } else if (vidDigits.length > 0) {
+                    cleanCardVid = String(rawVid).trim();
                 }
             }
 
@@ -299,7 +308,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
             cardData.husbandName_English = husbandBilingual.english !== "Not Found" ? husbandBilingual.english : (cardData.husbandName_English || "");
             cardData.husbandName_Hindi = husbandBilingual.hindi !== "Not Found" ? husbandBilingual.hindi : (cardData.husbandName_Hindi || "");
 
-            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Side: ${detectedSide}, Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens} (Prompt: ${tokens.promptTokens}, Completion: ${tokens.candidatesTokens})`);
+            console.log(`✅ [Gemini] Extracted Aadhaar with ${model} (Side: ${detectedSide}, Aadhaar: ${cleanCardAadhaar}, VID: ${cleanCardVid}, Accuracy: ${overallAccuracy}%) | Tokens: ${tokens.totalTokens}`);
             return {
                 success: true,
                 engine: `Gemini (${model})`,
@@ -318,7 +327,7 @@ Output ONLY raw valid JSON without markdown formatting.`;
                 },
                 data: {
                     aadharNumber: cleanCardAadhaar,
-                    vidNumber: cardData.vidNumber || cardData.virtualId || "Not Found",
+                    vidNumber: cleanCardVid,
                     nameEnglish: nameBilingual.english,
                     nameHindi: nameBilingual.hindi,
                     dob: cardData.dob || "Not Found",

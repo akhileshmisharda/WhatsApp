@@ -342,10 +342,17 @@ async function insertOrUpdateAadhaar({
 
             const [result] = await pool.execute(insertSql, insertParams);
 
+            let insertedRecord = null;
+            try {
+                const [rows] = await pool.execute('SELECT * FROM wh_aadhaar_card_records WHERE id = ? LIMIT 1', [result.insertId]);
+                insertedRecord = rows[0] || null;
+            } catch (e) {}
+
             return {
                 status: 'success',
                 action: 'inserted',
                 recordId: result.insertId,
+                record: insertedRecord,
                 side: isBackScan && !isFrontScan ? 'back' : 'front',
                 message: 'New Aadhaar record created.'
             };
@@ -531,11 +538,20 @@ async function insertOrUpdateAadhaar({
         const sanitizedUpdateParams = updateParams.map(v => (v === undefined ? null : v));
         await pool.execute(updateSql, sanitizedUpdateParams);
 
+        let mergedRecord = null;
+        try {
+            const [rows] = await pool.execute('SELECT * FROM wh_aadhaar_card_records WHERE id = ? LIMIT 1', [existing.id]);
+            mergedRecord = rows[0] || null;
+        } catch (e) {}
+
+        const hasBoth = mergedRecord ? !!(mergedRecord.front_image_uri && mergedRecord.back_image_uri) : true;
+
         return {
             status: 'success',
             action: 'updated',
             recordId: existing.id,
-            side: isFrontScan && isBackScan ? 'both' : (isFrontScan ? 'front' : 'back'),
+            record: mergedRecord,
+            side: hasBoth ? 'both' : (isFrontScan ? 'front' : 'back'),
             message: `Existing Aadhaar record ID #${existing.id} successfully updated with higher accuracy data.`
         };
 
