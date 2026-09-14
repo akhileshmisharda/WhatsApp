@@ -134,4 +134,15 @@ async function useMySQLAuthState(sessionId = 'default') {
     };
 }
 
-module.exports = { useMySQLAuthState };
+async function clearSessionAuth(sessionId = 'default') {
+    try {
+        await pool.execute(`DELETE FROM wh_baileys_auth WHERE session_id = ?`, [sessionId]);
+        console.log(`🗑️ [MySQLAuth:${sessionId}] Cleared auth credentials from MySQL`);
+        return true;
+    } catch (err) {
+        console.error(`❌ [MySQLAuth:${sessionId}] Error clearing auth:`, err.message);
+        return false;
+    }
+}
+
+module.exports = { useMySQLAuthState, clearSessionAuth };

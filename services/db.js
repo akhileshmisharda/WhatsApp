@@ -2,10 +2,11 @@ const mysql = require('mysql2/promise');
 
 // Configure database credentials for AK ERP with Indian Standard Time (IST / +05:30)
 const pool = mysql.createPool({
-    host: '50.63.129.30',
-    user: 'rishyamittal',
-    password: 'Mousekamakan@123',
-    database: 'rishya',
+    host: process.env.DB_HOST || '50.63.129.30',
+    port: Number(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || 'rishyamittal',
+    password: process.env.DB_PASSWORD || 'Mousekamakan@123',
+    database: process.env.DB_NAME || 'rishya',
     timezone: '+05:30',
     dateStrings: true,
     waitForConnections: true,

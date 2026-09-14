@@ -1,4 +1,5 @@
-process.env.TZ = 'Asia/Kolkata';
+try { require('dotenv').config(); } catch (e) {}
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
@@ -19,7 +20,7 @@ const {
 
 // Services
 const pool = require('./services/db');
-const { useMySQLAuthState } = require('./services/mysqlAuthService');
+const { useMySQLAuthState, clearSessionAuth } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
 const { extractAadhaarWithGemini, extractPanWithGemini, extractJamabandiWithGemini, extractSaleDeedWithGemini } = require('./services/geminiVisionService');
 const {
@@ -39,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.7-FIX-SECONDARY-BOT-TRIGGER";
+const APP_VERSION = "v5.4.8-AUTO-RECONNECT-QR";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -104,8 +105,9 @@ app.get('/', async (req, res) => {
                     <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ${badgeColor}; margin-right: 6px;"></span>
                     <strong style="color: ${badgeColor};">${s.status.toUpperCase()}</strong>
                 </td>
-                <td style="padding: 12px;">
+                <td style="padding: 12px; display: flex; gap: 6px;">
                     <a href="/qr/${s.session_id}" target="_blank" style="display: inline-block; background: #2563eb; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 13px;">📲 Scan QR</a>
+                    <a href="/reset-qr/${s.session_id}" style="display: inline-block; background: #64748b; color: white; padding: 6px 10px; border-radius: 6px; text-decoration: none; font-size: 13px;" onclick="return confirm('Force reset and generate fresh QR for ${s.session_id}?')">🔄 Reset</a>
                 </td>
             </tr>
         `;
@@ -136,7 +138,7 @@ app.get('/', async (req, res) => {
                     <span>🤖 Fabkraft Multi-Bot ERP Node</span>
                     <span class="badge">${APP_VERSION}</span>
                 </h1>
-                <p style="color: #64748b; margin-bottom: 20px;">Live WhatsApp Bot instances running concurrently on Google Cloud Run.</p>
+                <p style="color: #64748b; margin-bottom: 20px;">Live WhatsApp Bot instances running concurrently on Fabkraft VPS Node.</p>
 
                 <table>
                     <thead>
@@ -260,6 +262,28 @@ app.get('/qr/:sessionId', async (req, res) => {
     `;
 
     res.send(html);
+});
+
+// Manual QR Reset & Force Re-Scan Endpoint
+app.get('/reset-qr/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const sessionInfo = botSockets.get(sessionId);
+
+    if (!sessionInfo) {
+        return res.status(404).send(`Bot session '${sessionId}' not found.`);
+    }
+
+    try {
+        logEvent("FORCE_RESET_QR", `Force clearing auth and regenerating QR for ${sessionId}`);
+        await clearSessionAuth(sessionId);
+        if (sessionInfo.sock) {
+            try { sessionInfo.sock.end(undefined); } catch (e) {}
+        }
+        setTimeout(() => startBotSession(sessionInfo.botConfig), 1500);
+        return res.redirect(`/qr/${sessionId}`);
+    } catch (err) {
+        return res.status(500).send(`Error resetting session: ${err.message}`);
+    }
 });
 
 // Allowed Users / Whitelist API
@@ -554,8 +578,10 @@ async function startBotSession(botConfig) {
 
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            sessionState.connectionStatus = shouldReconnect ? "disconnected_reconnecting" : "logged_out";
+            const isLogout = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+            const shouldReconnect = !isLogout;
+            sessionState.connectionStatus = isLogout ? "waiting_for_qr_scan" : "disconnected_reconnecting";
+            
             logEvent("DISCONNECTED", `[${sessionId}] Connection closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`, {
                 error: lastDisconnect?.error?.message
             });
@@ -564,10 +590,14 @@ async function startBotSession(botConfig) {
                 status: sessionState.connectionStatus
             });
 
-            if (shouldReconnect) {
-                setTimeout(() => startBotSession(botConfig), 4000);
+            if (isLogout) {
+                logEvent("LOGGED_OUT", `[${sessionId}] Logged out / auth reset. Clearing stale keys and generating fresh QR at: /qr/${sessionId}`);
+                try {
+                    await clearSessionAuth(sessionId);
+                } catch (e) {}
+                setTimeout(() => startBotSession(botConfig), 3000);
             } else {
-                logEvent("LOGGED_OUT", `[${sessionId}] Logged out. Scan QR again at: /qr/${sessionId}`);
+                setTimeout(() => startBotSession(botConfig), 4000);
             }
         }
     });
