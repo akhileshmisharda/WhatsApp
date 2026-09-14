@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.3-FIX-AADHAAR-BIND-PARAMS";
+const APP_VERSION = "v5.5.4-RETRY-DOWNLOAD-AADHAAR-MERGE";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -429,7 +429,34 @@ function sanitizeUserFacingError(err) {
     ) {
         return "Could not extract document details. Please ensure the document is clear and readable, and try again.";
     }
+    if (raw.includes('1006') || raw.includes('Connection Closed') || raw.includes('closed') || raw.includes('ECONNRESET')) {
+        return "WhatsApp media download connection was briefly interrupted. Please resend the document image.";
+    }
     return raw.length > 100 ? "Document processing failed. Please try again." : raw;
+}
+
+/**
+ * Downloads WhatsApp media with automatic retry to handle transient network/socket glitches (e.g. 1006)
+ */
+async function downloadMediaWithRetry(mediaMsgObj, maxRetries = 3) {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await downloadMediaMessage(
+                mediaMsgObj,
+                'buffer',
+                {},
+                { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
+            );
+        } catch (err) {
+            lastErr = err;
+            console.warn(`⚠️ [MediaDownload] Download attempt ${attempt}/${maxRetries} failed (${err.message}). Retrying in 1.5s...`);
+            if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+    }
+    throw lastErr || new Error("Failed to download media after retries.");
 }
 
 function getMessageDetails(msg) {
@@ -895,12 +922,7 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
     }, { quoted: quotedRef || mediaMsgObj });
 
     try {
-        const buffer = await downloadMediaMessage(
-            mediaMsgObj,
-            'buffer',
-            {},
-            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
-        );
+        const buffer = await downloadMediaWithRetry(mediaMsgObj, 3);
 
         const timestamp = Date.now();
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
@@ -1031,12 +1053,7 @@ async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, sende
     }, { quoted: quotedRef || mediaMsgObj });
 
     try {
-        const buffer = await downloadMediaMessage(
-            mediaMsgObj,
-            'buffer',
-            {},
-            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
-        );
+        const buffer = await downloadMediaWithRetry(mediaMsgObj, 3);
 
         const timestamp = Date.now();
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
@@ -1112,12 +1129,7 @@ async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid,
     }, { quoted: quotedRef || mediaMsgObj });
 
     try {
-        const buffer = await downloadMediaMessage(
-            mediaMsgObj,
-            'buffer',
-            {},
-            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
-        );
+        const buffer = await downloadMediaWithRetry(mediaMsgObj, 3);
 
         const timestamp = Date.now();
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
@@ -1227,12 +1239,7 @@ async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, 
     }, { quoted: quotedRef || mediaMsgObj });
 
     try {
-        const buffer = await downloadMediaMessage(
-            mediaMsgObj,
-            'buffer',
-            {},
-            { logger: P({ level: "silent" }), reconnectMode: 'on-demand' }
-        );
+        const buffer = await downloadMediaWithRetry(mediaMsgObj, 3);
 
         const timestamp = Date.now();
         const ext = mimeType === 'application/pdf' ? 'pdf' : 'jpg';
