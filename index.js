@@ -20,7 +20,7 @@ const {
 
 // Services
 const pool = require('./services/db');
-const { useMySQLAuthState, clearSessionAuth } = require('./services/mysqlAuthService');
+const { useMySQLAuthState, clearSessionAuth, purgeCorruptSessionKeys } = require('./services/mysqlAuthService');
 const { uploadToFabkraft } = require('./services/uploadService');
 const { extractAadhaarWithGemini, extractPanWithGemini, extractJamabandiWithGemini, extractSaleDeedWithGemini } = require('./services/geminiVisionService');
 const {
@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.4.9-FIX-BAD-MAC-CLEAN-AUTH";
+const APP_VERSION = "v5.5.0-AUTO-HEAL-BAD-MAC";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -604,6 +604,7 @@ async function startBotSession(botConfig) {
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
+            console.log(`📩 [${sessionId}] messages.upsert received: type=${type}, count=${messages?.length || 0}`);
             if (type !== "notify") return;
 
             const nowSeconds = Math.floor(Date.now() / 1000);
@@ -634,6 +635,8 @@ async function startBotSession(botConfig) {
 
                 const { text, isMedia, isImage, isPdf, mimeType, quotedMsg, contextInfo } = getMessageDetails(msg);
                 const captionText = text.trim().toLowerCase();
+
+                console.log(`💬 [${sessionId}] Incoming from: ${senderJid} (fromMe: ${!!msg.key.fromMe}) | Text: "${text}" | isMedia: ${isMedia}`);
 
                 // Prevent automated loopback replies from the bot itself
                 if (
@@ -708,6 +711,8 @@ async function startBotSession(botConfig) {
                     }
                 }
 
+                console.log(`🎯 [${sessionId}] isCustomMenuBot=${isCustomMenuBot} | isBotCommand=${isBotCommand} | isExactGreeting=${isExactGreeting}`);
+
                 // If NOT a bot trigger, DO NOTHING! Let normal human chat work without any bot interruption.
                 if (!isBotCommand) {
                     continue;
@@ -718,6 +723,8 @@ async function startBotSession(botConfig) {
                 // Evaluated ONLY when someone intentionally triggers a bot command
                 // ---------------------------------------------------------
                 const authCheck = await isSenderAllowed(senderMobile, sessionId);
+                console.log(`🔐 [${sessionId}] Access check for ${senderMobile}: allowed=${authCheck.allowed}`);
+
                 if (!authCheck.allowed) {
                     logEvent("ACCESS_DENIED", `Blocked unauthorized trigger from ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
                     await sock.sendMessage(replyJid, {
@@ -747,6 +754,7 @@ async function startBotSession(botConfig) {
                 // ROUTE ACCORDING TO BOT MENU TYPE
                 // ---------------------------------------------------------
                 if (isCustomMenuBot) {
+                    console.log(`🚀 [${sessionId}] Routing to Custom Menu Flow...`);
                     await handleCustomMenuFlow({
                         sock,
                         botConfig,
@@ -763,6 +771,7 @@ async function startBotSession(botConfig) {
 
                 // DOCUMENT_OCR Flow:
                 if (isExactGreeting && !isMedia) {
+                    console.log(`🚀 [${sessionId}] Sending OCR menu to ${senderMobile}...`);
                     logEvent("MENU_REPLY", `Sending OCR menu to ${senderMobile}`);
                     await sendMenuResponse(sock, replyJid, msg, sessionState.currentBotNumber);
                     continue;
@@ -779,6 +788,7 @@ async function startBotSession(botConfig) {
                 }
             }
         } catch (err) {
+            console.error(`❌ [${sessionId}] Message upsert error:`, err);
             logEvent("MESSAGE_UPSERT_ERROR", `[${sessionId}] ${err.message}`);
         }
     });

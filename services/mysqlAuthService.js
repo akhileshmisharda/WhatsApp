@@ -145,4 +145,15 @@ async function clearSessionAuth(sessionId = 'default') {
     }
 }
 
-module.exports = { useMySQLAuthState, clearSessionAuth };
+async function purgeCorruptSessionKeys(sessionId = 'default') {
+    try {
+        await pool.execute(`DELETE FROM wh_baileys_auth WHERE session_id = ? AND id LIKE 'session-%'`, [sessionId]);
+        console.log(`🧹 [MySQLAuth:${sessionId}] Purged all stale session ratchet keys from MySQL`);
+        return true;
+    } catch (err) {
+        console.error(`❌ [MySQLAuth:${sessionId}] Error purging session keys:`, err.message);
+        return false;
+    }
+}
+
+module.exports = { useMySQLAuthState, clearSessionAuth, purgeCorruptSessionKeys };
