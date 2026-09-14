@@ -1,12 +1,28 @@
 const mysql = require('mysql2/promise');
 
+// Helper to extract clean single values even if .env was pasted on one single line
+function cleanEnv(val, fallback) {
+    if (!val) return fallback;
+    const str = String(val).trim();
+    // If str contains multiple space-separated KEY=VALUE pairs, take just the first token
+    const firstToken = str.split(/\s+/)[0];
+    return firstToken || fallback;
+}
+
+const dbHost = cleanEnv(process.env.DB_HOST, '50.63.129.30');
+const rawPort = cleanEnv(process.env.DB_PORT, '3306');
+const dbPort = parseInt(rawPort.match(/\d+/)?.[0] || '3306', 10);
+const dbUser = cleanEnv(process.env.DB_USER, 'rishyamittal');
+const dbPassword = cleanEnv(process.env.DB_PASSWORD, 'Mousekamakan@123');
+const dbName = cleanEnv(process.env.DB_NAME, 'rishya');
+
 // Configure database credentials for AK ERP with Indian Standard Time (IST / +05:30)
 const pool = mysql.createPool({
-    host: process.env.DB_HOST || '50.63.129.30',
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || 'rishyamittal',
-    password: process.env.DB_PASSWORD || 'Mousekamakan@123',
-    database: process.env.DB_NAME || 'rishya',
+    host: dbHost,
+    port: dbPort,
+    user: dbUser,
+    password: dbPassword,
+    database: dbName,
     timezone: '+05:30',
     dateStrings: true,
     waitForConnections: true,

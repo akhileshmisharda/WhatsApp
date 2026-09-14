@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.0-AUTO-HEAL-BAD-MAC";
+const APP_VERSION = "v5.5.1-FIX-SELF-CHAT-LID-TRIGGER";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -61,7 +61,9 @@ function logEvent(type, message, data = null) {
 // 2. EXPRESS HTTP SERVER & DASHBOARD
 // ---------------------------------------------------------
 const app = express();
-const PORT = process.env.PORT || 8080;
+const rawPort = (process.env.PORT || '').toString().trim();
+const parsedPort = parseInt(rawPort.match(/\d+/)?.[0] || '8080', 10);
+const PORT = (!isNaN(parsedPort) && parsedPort > 0) ? parsedPort : 8080;
 
 app.use(express.json());
 
@@ -649,20 +651,29 @@ async function startBotSession(botConfig) {
                     continue;
                 }
 
-                const currentBotNum = sessionState.currentBotNumber || botConfig.phone_number || '';
+                const currentBotNum = (sessionState.currentBotNumber || botConfig.phone_number || '').replace(/[^0-9]/g, "");
+                const botIdNum = (sock.user?.id || '').split(':')[0].replace(/[^0-9]/g, "");
+                const botLidNum = (sock.user?.lid || authState?.creds?.me?.lid || '').split(':')[0].split('@')[0].replace(/[^0-9]/g, "");
+                const senderClean = senderJid.split('@')[0].replace(/[^0-9]/g, "");
+
+                // Check if this message is in a self-chat (Message to yourself / testing on bot device)
+                const isSelfChat = (
+                    (currentBotNum && (senderJid.includes(currentBotNum) || senderClean.includes(currentBotNum))) ||
+                    (botIdNum && (senderJid.includes(botIdNum) || senderClean.includes(botIdNum))) ||
+                    (botLidNum && (senderJid.includes(botLidNum) || senderClean.includes(botLidNum))) ||
+                    senderJid.endsWith('@lid') // Any @lid fromMe message is self-chat on WhatsApp web / linked device
+                );
 
                 // If user is sending a message from the bot's phone to a DIFFERENT contact (regular outgoing chat), ignore it
-                const isSelfChat = senderJid.includes(currentBotNum) || 
-                                   (sock.user?.id && senderJid.split('@')[0].includes(sock.user.id.split(':')[0].replace(/[^0-9]/g, "")));
                 if (msg.key.fromMe && !isSelfChat) {
                     continue;
                 }
 
                 const senderMobile = await getActualPhoneNumber(senderJid, msg, sessionState);
 
-                // Clean reply JID (resolve LID to standard whatsapp jid if needed)
+                // Clean reply JID (reply directly into whatever thread initiated the message)
                 let replyJid = senderJid;
-                if (senderJid.endsWith('@lid') && senderMobile && senderMobile !== 'Unknown' && /^\d{10,14}$/.test(senderMobile)) {
+                if (!msg.key.fromMe && senderJid.endsWith('@lid') && senderMobile && senderMobile !== 'Unknown' && /^\d{10,14}$/.test(senderMobile)) {
                     const formattedPhone = senderMobile.length === 10 ? `91${senderMobile}` : senderMobile;
                     replyJid = `${formattedPhone}@s.whatsapp.net`;
                 }
@@ -727,9 +738,15 @@ async function startBotSession(botConfig) {
 
                 if (!authCheck.allowed) {
                     logEvent("ACCESS_DENIED", `Blocked unauthorized trigger from ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
-                    await sock.sendMessage(replyJid, {
-                        text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
-                    }, { quoted: msg });
+                    try {
+                        await sock.sendMessage(replyJid, {
+                            text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
+                        }, { quoted: msg });
+                    } catch (e) {
+                        await sock.sendMessage(replyJid, {
+                            text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
+                        });
+                    }
                     continue;
                 }
 
@@ -780,11 +797,11 @@ async function startBotSession(botConfig) {
                 if (isAadhaarTag) {
                     await handleAadhaarGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isPanTag) {
-                    await handlePanGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handlePanGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isJamabandiTag) {
-                    await handleJamabandiGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleJamabandiGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isSaleDeedTag) {
-                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, senderJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleSaleDeedGeminiFlow(sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 }
             }
         } catch (err) {
@@ -833,7 +850,11 @@ async function sendMenuResponse(sock, replyJid, quotedMsg, botNumber = "Unknown"
         `• Extracted: Deed No, Registration Date, SRO, Property Details, Area/Rakba, Boundaries, Consideration/Cheque, Seller & Buyer Details\n\n` +
         `Powered by FabKraft AI`;
 
-    await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
+    try {
+        await sock.sendMessage(replyJid, { text: menuText }, { quoted: quotedMsg });
+    } catch (e) {
+        await sock.sendMessage(replyJid, { text: menuText });
+    }
 }
 
 /**
