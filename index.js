@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.2-SAFE-RECONNECT-DELIVERY";
+const APP_VERSION = "v5.5.3-FIX-AADHAAR-BIND-PARAMS";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -960,6 +960,7 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
             accuracyPincode: accuracy.pincode,
             senderMobile: senderMobile,
             receiverMobile: currentBotNumber,
+            uploadUri: uploadUri,
             documentUri: uploadUri,
             mimeType: mimeType
         });

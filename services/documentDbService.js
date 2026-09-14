@@ -171,9 +171,12 @@ async function insertOrUpdateAadhaar({
     accuracyPincode,
     senderMobile,
     receiverMobile,
-    uploadUri
+    uploadUri,
+    documentUri
 }) {
     await ensureAadhaarColumnsExist();
+
+    const actualUploadUri = sanitizeInput(uploadUri || documentUri);
 
     let cleanAadhaar = null;
     if (aadharNumber && aadharNumber !== "Not Found") {
@@ -267,8 +270,8 @@ async function insertOrUpdateAadhaar({
             const finalAadhaarNum = payload.aadhar_number || `DOC${Date.now().toString().slice(-8)}`;
             
             // First time: If pure back scan -> back_image_uri, otherwise -> front_image_uri
-            const frontUri = (isBackScan && !isFrontScan) ? null : uploadUri;
-            const backUri = (isBackScan && !isFrontScan) ? uploadUri : null;
+            const frontUri = (isBackScan && !isFrontScan) ? null : actualUploadUri;
+            const backUri = (isBackScan && !isFrontScan) ? actualUploadUri : null;
 
             const istNow = getISTNow();
             const insertSql = `
@@ -318,7 +321,7 @@ async function insertOrUpdateAadhaar({
                 backUri,
                 istNow,
                 istNow
-            ];
+            ].map(v => (v === undefined ? null : v));
 
             const [result] = await pool.execute(insertSql, insertParams);
 
@@ -338,16 +341,16 @@ async function insertOrUpdateAadhaar({
         // 1. Non-overlapping image assignment:
         if (existing.front_image_uri && !existing.back_image_uri) {
             updateClauses.push('`back_image_uri` = ?');
-            updateParams.push(uploadUri);
+            updateParams.push(actualUploadUri);
         } else if (existing.back_image_uri && !existing.front_image_uri) {
             updateClauses.push('`front_image_uri` = ?');
-            updateParams.push(uploadUri);
+            updateParams.push(actualUploadUri);
         } else if (isBackScan) {
             updateClauses.push('`back_image_uri` = ?');
-            updateParams.push(uploadUri);
+            updateParams.push(actualUploadUri);
         } else {
             updateClauses.push('`front_image_uri` = ?');
-            updateParams.push(uploadUri);
+            updateParams.push(actualUploadUri);
         }
 
         // 2. Aadhaar Number: If existing is valid, keep it; if new has valid and existing was dummy, update it
@@ -508,7 +511,8 @@ async function insertOrUpdateAadhaar({
             WHERE id = ?
         `;
 
-        await pool.execute(updateSql, updateParams);
+        const sanitizedUpdateParams = updateParams.map(v => (v === undefined ? null : v));
+        await pool.execute(updateSql, sanitizedUpdateParams);
 
         return {
             status: 'success',
