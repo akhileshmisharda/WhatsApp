@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.5-FULL-AADHAAR-BACK-AND-MERGE";
+const APP_VERSION = "v5.5.6-RESPONSIVE-COMMANDS-AND-LID-FIX";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -700,17 +700,17 @@ async function startBotSession(botConfig) {
 
                 // Clean reply JID (reply directly into whatever thread initiated the message)
                 let replyJid = senderJid;
-                if (!msg.key.fromMe && senderJid.endsWith('@lid') && senderMobile && senderMobile !== 'Unknown' && /^\d{10,14}$/.test(senderMobile)) {
+                if (senderJid.endsWith('@lid') && senderMobile && senderMobile !== 'Unknown' && /^\d{10,14}$/.test(senderMobile)) {
                     const formattedPhone = senderMobile.length === 10 ? `91${senderMobile}` : senderMobile;
                     replyJid = `${formattedPhone}@s.whatsapp.net`;
                 }
 
                 // Command Triggers:
-                const isAadhaarTag = /^(a|aadhar|adhar|aadhaar)\b/i.test(captionText) || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
-                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText.includes("pan");
-                const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
-                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
-                const isExactGreeting = /^(hi|hello|hey|menu|help|start|namaste|hlo|helo)[\s!.,?]*$/i.test(captionText) || 
+                const isAadhaarTag = /^(a|aadhar|adhar|aadhaar)\b/i.test(captionText) || captionText === "a" || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
+                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText === "p" || captionText.includes("pan");
+                const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText === "j" || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
+                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText === "s" || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
+                const isExactGreeting = /^(hi|hello|hey|menu|help|start|namaste|hlo|helo|info)[\s!.,?]*$/i.test(captionText) || 
                                         captionText === 'menu' || 
                                         captionText === 'hi' ||
                                         captionText === 'help' ||
@@ -740,11 +740,9 @@ async function startBotSession(botConfig) {
                     isBotCommand = isCustomMenuTag;
                 } else {
                     // DOCUMENT_OCR Bot Line:
-                    // 1. Exact greeting/menu command (text only)
-                    // 2. Document upload with valid tag (a, p, j, s)
-                    if (isExactGreeting && !isMedia) {
-                        isBotCommand = true;
-                    } else if ((isMedia || quotedMsg) && (isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag)) {
+                    // 1. Exact greeting/menu command (hi, menu, start, help)
+                    // 2. Document command or upload with valid tag (a, p, j, s)
+                    if (isExactGreeting || isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag) {
                         isBotCommand = true;
                     }
                 }
@@ -822,12 +820,36 @@ async function startBotSession(botConfig) {
                 }
 
                 if (isAadhaarTag) {
+                    if (!isMedia && !quotedMsg) {
+                        await safeSendMessage(sessionId, sock, replyJid, {
+                            text: `📸 *Aadhaar Image / PDF Required*\n\nPlease attach an image or PDF of the Aadhaar card (Front or Back) with the caption *a*, or reply to an existing document with *a*.`
+                        }, { quoted: msg });
+                        continue;
+                    }
                     await handleAadhaarGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isPanTag) {
+                    if (!isMedia && !quotedMsg) {
+                        await safeSendMessage(sessionId, sock, replyJid, {
+                            text: `📸 *PAN Card Image / PDF Required*\n\nPlease attach an image or PDF of the PAN card with the caption *p*, or reply to an existing document with *p*.`
+                        }, { quoted: msg });
+                        continue;
+                    }
                     await handlePanGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isJamabandiTag) {
+                    if (!isMedia && !quotedMsg) {
+                        await safeSendMessage(sessionId, sock, replyJid, {
+                            text: `📄 *Jamabandi Document Required*\n\nPlease attach an image or PDF of the Jamabandi (P-26C) with the caption *j*, or reply to an existing document with *j*.`
+                        }, { quoted: msg });
+                        continue;
+                    }
                     await handleJamabandiGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 } else if (isSaleDeedTag) {
+                    if (!isMedia && !quotedMsg) {
+                        await safeSendMessage(sessionId, sock, replyJid, {
+                            text: `📜 *Sale Deed Document Required*\n\nPlease attach an image or PDF of the Sale Deed (बैनामा / विक्रय पत्र) with the caption *s*, or reply to an existing document with *s*.`
+                        }, { quoted: msg });
+                        continue;
+                    }
                     await handleSaleDeedGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
                 }
             }
