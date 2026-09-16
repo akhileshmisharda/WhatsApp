@@ -54,6 +54,7 @@ async function ensureAadhaarColumnsExist() {
             CREATE TABLE IF NOT EXISTS \`wh_aadhaar_card_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`reference_id\` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 3650 from A-3650',
                 \`aadhar_number\` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',
                 \`virtual_id\` VARCHAR(25) DEFAULT NULL COMMENT '16-digit VID',
                 \`name_english\` VARCHAR(255) DEFAULT NULL,
@@ -86,6 +87,7 @@ async function ensureAadhaarColumnsExist() {
                 \`back_image_uri\` VARCHAR(500) DEFAULT NULL,
                 \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_reference_id\` (\`reference_id\`),
                 INDEX \`idx_aadhar_number\` (\`aadhar_number\`),
                 INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -96,6 +98,7 @@ async function ensureAadhaarColumnsExist() {
         const existingCols = cols.map(c => c.Field);
         
         const requiredCols = [
+            { name: 'reference_id', def: 'INT DEFAULT NULL' },
             { name: 'relation_status', def: 'VARCHAR(50) DEFAULT NULL' },
             { name: 'father_name_english', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'father_name_hindi', def: 'VARCHAR(255) DEFAULT NULL' },
@@ -142,6 +145,7 @@ function shouldUpdateField(newVal, newAcc, oldVal, oldAcc) {
  */
 async function insertOrUpdateAadhaar({
     uploadId,
+    referenceId,
     aadharNumber,
     virtualId,
     nameEnglish,
@@ -214,8 +218,13 @@ async function insertOrUpdateAadhaar({
     const fatherBilingual = ensureBilingualName(fatherNameEnglish, fatherNameHindi);
     const husbandBilingual = ensureBilingualName(husbandNameEnglish, husbandNameHindi);
 
+    const parsedRefId = (referenceId !== undefined && referenceId !== null && !isNaN(parseInt(referenceId, 10))) 
+        ? parseInt(referenceId, 10) 
+        : null;
+
     const payload = {
         upload_id: uploadId || null,
+        reference_id: parsedRefId,
         aadhar_number: cleanAadhaar,
         virtual_id: sanitizeInput(virtualId),
         name_english: sanitizeInput(nameBilingual.english),
@@ -293,7 +302,7 @@ async function insertOrUpdateAadhaar({
             const istNow = getISTNow();
             const insertSql = `
                 INSERT INTO wh_aadhaar_card_records (
-                    upload_id, aadhar_number, virtual_id, name_english, name_hindi,
+                    upload_id, reference_id, aadhar_number, virtual_id, name_english, name_hindi,
                     dob, gender_english, gender_hindi, relation_status, father_name_english, father_name_hindi,
                     husband_name_english, husband_name_hindi, address_english, address_hindi,
                     pincode, raw_json, tokens_prompt, tokens_completion, tokens_total, ai_model,
@@ -301,11 +310,12 @@ async function insertOrUpdateAadhaar({
                     accuracy_name_hindi, accuracy_dob, accuracy_pincode,
                     sender_mobile, receiver_mobile, front_image_uri, back_image_uri,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertParams = [
                 payload.upload_id,
+                payload.reference_id,
                 finalAadhaarNum,
                 payload.virtual_id,
                 payload.name_english,
@@ -361,6 +371,12 @@ async function insertOrUpdateAadhaar({
         // Case B: Existing Record Found -> Merge & Upgrade (Populate the second image field)
         const updateClauses = [];
         const updateParams = [];
+
+        // Reference ID upgrade
+        if (payload.reference_id !== null && payload.reference_id !== undefined) {
+            updateClauses.push('`reference_id` = ?');
+            updateParams.push(payload.reference_id);
+        }
 
         // 1. Non-overlapping image assignment:
         if (existing.front_image_uri && !existing.back_image_uri) {
@@ -569,6 +585,7 @@ async function ensurePanCardTableExists() {
             CREATE TABLE IF NOT EXISTS \`wh_pan_card_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`reference_id\` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 1234 from P-1234',
                 \`pan_number\` VARCHAR(20) NOT NULL UNIQUE COMMENT '10-character Alphanumeric PAN',
                 \`name\` VARCHAR(255) DEFAULT NULL,
                 \`father_name\` VARCHAR(255) DEFAULT NULL,
@@ -578,11 +595,20 @@ async function ensurePanCardTableExists() {
                 \`image_uri\` VARCHAR(500) DEFAULT NULL,
                 \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_reference_id\` (\`reference_id\`),
                 INDEX \`idx_pan_number\` (\`pan_number\`),
                 INDEX \`idx_sender_mobile\` (\`sender_mobile\`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `;
         await pool.execute(createSql);
+
+        const [cols] = await pool.execute(`SHOW COLUMNS FROM wh_pan_card_records`);
+        const existingCols = cols.map(c => c.Field);
+        if (!existingCols.includes('reference_id')) {
+            await pool.execute(`ALTER TABLE wh_pan_card_records ADD COLUMN \`reference_id\` INT DEFAULT NULL`);
+            console.log(`✅ [Database] Added missing column 'reference_id' to wh_pan_card_records`);
+        }
+
         panCardTableChecked = true;
         console.log("✅ [Database] Checked/Created 'wh_pan_card_records' table");
     } catch (err) {
@@ -595,6 +621,7 @@ async function ensurePanCardTableExists() {
  */
 async function insertOrUpdatePan({
     uploadId,
+    referenceId,
     panNumber,
     name,
     fatherName,
@@ -610,8 +637,13 @@ async function insertOrUpdatePan({
         throw new Error("PAN Number is required for database operations.");
     }
 
+    const parsedRefId = (referenceId !== undefined && referenceId !== null && !isNaN(parseInt(referenceId, 10))) 
+        ? parseInt(referenceId, 10) 
+        : null;
+
     const payload = {
         upload_id: uploadId || null,
+        reference_id: parsedRefId,
         pan_number: cleanPan,
         name: sanitizeInput(name),
         father_name: sanitizeInput(fatherName),
@@ -631,13 +663,14 @@ async function insertOrUpdatePan({
             const istNow = getISTNow();
             const insertSql = `
                 INSERT INTO wh_pan_card_records (
-                    upload_id, pan_number, name, father_name, dob,
+                    upload_id, reference_id, pan_number, name, father_name, dob,
                     sender_mobile, receiver_mobile, image_uri,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const params = [
                 payload.upload_id,
+                payload.reference_id,
                 payload.pan_number,
                 payload.name,
                 payload.father_name,
@@ -660,7 +693,7 @@ async function insertOrUpdatePan({
             const updateClauses = [];
             const updateParams = [];
 
-            const fields = ['upload_id', 'name', 'father_name', 'dob', 'sender_mobile', 'receiver_mobile', 'image_uri'];
+            const fields = ['upload_id', 'reference_id', 'name', 'father_name', 'dob', 'sender_mobile', 'receiver_mobile', 'image_uri'];
             for (const f of fields) {
                 if (payload[f] !== null) {
                     updateClauses.push(`${f} = ?`);
@@ -704,6 +737,7 @@ async function ensureJamabandiTableExists() {
             CREATE TABLE IF NOT EXISTS \`wh_old_jamabandi_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`reference_id\` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 4750 from J-4750',
                 \`form_name\` VARCHAR(255) DEFAULT NULL,
                 \`document_type\` VARCHAR(255) DEFAULT NULL,
                 \`village\` VARCHAR(255) DEFAULT NULL,
@@ -734,6 +768,7 @@ async function ensureJamabandiTableExists() {
                 \`mime_type\` VARCHAR(50) DEFAULT 'image/jpeg',
                 \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_reference_id\` (\`reference_id\`),
                 INDEX \`idx_village\` (\`village\`),
                 INDEX \`idx_tehsil\` (\`tehsil\`),
                 INDEX \`idx_district\` (\`district\`),
@@ -748,6 +783,7 @@ async function ensureJamabandiTableExists() {
 
         const requiredCols = [
             { name: 'upload_id', def: 'INT DEFAULT NULL' },
+            { name: 'reference_id', def: 'INT DEFAULT NULL' },
             { name: 'form_name', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'document_type', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'village', def: 'VARCHAR(255) DEFAULT NULL' },
@@ -797,6 +833,7 @@ async function ensureJamabandiTableExists() {
  */
 async function insertJamabandiRecord({
     uploadId,
+    referenceId,
     formName,
     documentType,
     village,
@@ -830,21 +867,26 @@ async function insertJamabandiRecord({
     const khatedarArray = Array.isArray(khatedarDetails) ? khatedarDetails : [];
     const khasraArray = Array.isArray(khasraDetails) ? khasraDetails : [];
 
+    const parsedRefId = (referenceId !== undefined && referenceId !== null && !isNaN(parseInt(referenceId, 10))) 
+        ? parseInt(referenceId, 10) 
+        : null;
+
     const istNow = getISTNow();
     const insertSql = `
         INSERT INTO wh_old_jamabandi_records (
-            upload_id, form_name, document_type, village, patwar_halka,
+            upload_id, reference_id, form_name, document_type, village, patwar_halka,
             land_inspector_circle, tehsil, district, land_holder, samvat_period,
             area_unit, khata_no_new, khata_no_old, total_khasra_count, total_area,
             total_rent, khatedar_count, khatedar_details, khasra_details, raw_json,
             tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
             sender_mobile, receiver_mobile, document_uri, mime_type,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
         uploadId || null,
+        parsedRefId,
         sanitizeInput(formName),
         sanitizeInput(documentType),
         sanitizeInput(village),
@@ -895,6 +937,7 @@ async function ensureSaleDeedTableExists() {
             CREATE TABLE IF NOT EXISTS \`wh_sale_deed_records\` (
                 \`id\` INT AUTO_INCREMENT PRIMARY KEY,
                 \`upload_id\` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+                \`reference_id\` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 5552 from S-5552',
                 \`document_type\` VARCHAR(255) DEFAULT NULL,
                 \`deed_number\` VARCHAR(100) DEFAULT NULL,
                 \`registration_date\` VARCHAR(50) DEFAULT NULL,
@@ -942,6 +985,7 @@ async function ensureSaleDeedTableExists() {
                 \`mime_type\` VARCHAR(50) DEFAULT 'image/jpeg',
                 \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX \`idx_reference_id\` (\`reference_id\`),
                 INDEX \`idx_deed_number\` (\`deed_number\`),
                 INDEX \`idx_village\` (\`village\`),
                 INDEX \`idx_tehsil\` (\`tehsil\`),
@@ -956,6 +1000,7 @@ async function ensureSaleDeedTableExists() {
 
         const requiredCols = [
             { name: 'upload_id', def: 'INT DEFAULT NULL' },
+            { name: 'reference_id', def: 'INT DEFAULT NULL' },
             { name: 'document_type', def: 'VARCHAR(255) DEFAULT NULL' },
             { name: 'deed_number', def: 'VARCHAR(100) DEFAULT NULL' },
             { name: 'registration_date', def: 'VARCHAR(50) DEFAULT NULL' },
@@ -1022,6 +1067,7 @@ async function ensureSaleDeedTableExists() {
  */
 async function insertSaleDeedRecord({
     uploadId,
+    referenceId,
     documentType,
     deedNumber,
     registrationDate,
@@ -1070,10 +1116,14 @@ async function insertSaleDeedRecord({
 }) {
     await ensureSaleDeedTableExists();
 
+    const parsedRefId = (referenceId !== undefined && referenceId !== null && !isNaN(parseInt(referenceId, 10))) 
+        ? parseInt(referenceId, 10) 
+        : null;
+
     const istNow = getISTNow();
     const insertSql = `
         INSERT INTO wh_sale_deed_records (
-            upload_id, document_type, deed_number, registration_date, sub_registrar_office,
+            upload_id, reference_id, document_type, deed_number, registration_date, sub_registrar_office,
             transaction_type, property_type, plot_number, khasra_number, village,
             tehsil, district, area_front, area_depth, total_area_sqft, rakba,
             boundaries, sale_amount, market_value, payment_mode, cheque_number,
@@ -1084,11 +1134,12 @@ async function insertSaleDeedRecord({
             tokens_prompt, tokens_completion, tokens_total, ai_model, accuracy_overall,
             sender_mobile, receiver_mobile, document_uri, mime_type,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
         uploadId || null,
+        parsedRefId,
         sanitizeInput(documentType),
         sanitizeInput(deedNumber),
         sanitizeInput(registrationDate),

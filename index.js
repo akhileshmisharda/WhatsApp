@@ -40,7 +40,7 @@ const { handleCustomMenuFlow } = require('./services/botMenuRouter');
 // ---------------------------------------------------------
 // 1. STATE, VERSION & EVENT LOGS
 // ---------------------------------------------------------
-const APP_VERSION = "v5.5.6-RESPONSIVE-COMMANDS-AND-LID-FIX";
+const APP_VERSION = "v5.5.7-REFERENCE-ID-AND-OPEN-ACCESS";
 
 const botSockets = new Map(); // sessionId -> { sock, botConfig, qr, connectionStatus, lastConnectedAt, lastQrGeneratedAt, currentBotNumber }
 const eventLogs = [];
@@ -705,11 +705,59 @@ async function startBotSession(botConfig) {
                     replyJid = `${formattedPhone}@s.whatsapp.net`;
                 }
 
-                // Command Triggers:
-                const isAadhaarTag = /^(a|aadhar|adhar|aadhaar)\b/i.test(captionText) || captionText === "a" || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
-                const isPanTag = /^(p|pan)\b/i.test(captionText) || captionText === "p" || captionText.includes("pan");
-                const isJamabandiTag = /^(j|jamabandi|jama|jb)\b/i.test(captionText) || captionText === "j" || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी");
-                const isSaleDeedTag = /^(s|sale_deed|saledeed|sale deed|registry|deed)\b/i.test(captionText) || captionText === "s" || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री");
+                // ---------------------------------------------------------
+                // COMMAND & REFERENCE ID EXTRACTION (e.g. J-4750, S-5552, A-3650, P-1234)
+                // ---------------------------------------------------------
+                let referenceId = null;
+
+                // Aadhaar match (e.g. A-3650, A 3650, A3650, a, aadhar, adhar, aadhaar)
+                const aadhaarRegex = /^(?:a|aadhar|adhar|aadhaar)(?:[\s\-_:#]*(\d+))?$/i;
+                const aadhaarPrefixRegex = /^(?:a|aadhar|adhar|aadhaar)[\s\-_:#]+(\d+)/i;
+                let aadhaarMatch = captionText.match(aadhaarRegex) || captionText.match(aadhaarPrefixRegex);
+                const isAadhaarTag = !!aadhaarMatch || captionText === "a" || captionText.startsWith("a-") || captionText.startsWith("a ") || captionText.includes("aadhar") || captionText.includes("adhar") || captionText.includes("aadhaar");
+                if (aadhaarMatch && aadhaarMatch[1]) {
+                    referenceId = parseInt(aadhaarMatch[1], 10);
+                } else if (isAadhaarTag) {
+                    const fallbackNum = captionText.match(/^(?:a|aadhar|adhar|aadhaar)[\s\-_:#]*(\d+)/i);
+                    if (fallbackNum && fallbackNum[1]) referenceId = parseInt(fallbackNum[1], 10);
+                }
+
+                // PAN match (e.g. P-1234, P 1234, P1234, p, pan)
+                const panRegex = /^(?:p|pan)(?:[\s\-_:#]*(\d+))?$/i;
+                const panPrefixRegex = /^(?:p|pan)[\s\-_:#]+(\d+)/i;
+                let panMatch = captionText.match(panRegex) || captionText.match(panPrefixRegex);
+                const isPanTag = !isAadhaarTag && (!!panMatch || captionText === "p" || captionText.startsWith("p-") || captionText.startsWith("p ") || captionText.includes("pan"));
+                if (panMatch && panMatch[1]) {
+                    referenceId = parseInt(panMatch[1], 10);
+                } else if (isPanTag) {
+                    const fallbackNum = captionText.match(/^(?:p|pan)[\s\-_:#]*(\d+)/i);
+                    if (fallbackNum && fallbackNum[1]) referenceId = parseInt(fallbackNum[1], 10);
+                }
+
+                // Jamabandi match (e.g. J-4750, J 4750, J4750, j, jamabandi, jama, jb, जमाबंदी)
+                const jamaRegex = /^(?:j|jamabandi|jama|jb|जमाबंदी)(?:[\s\-_:#]*(\d+))?$/i;
+                const jamaPrefixRegex = /^(?:j|jamabandi|jama|jb|जमाबंदी)[\s\-_:#]+(\d+)/i;
+                let jamaMatch = captionText.match(jamaRegex) || captionText.match(jamaPrefixRegex);
+                const isJamabandiTag = !isAadhaarTag && !isPanTag && (!!jamaMatch || captionText === "j" || captionText.startsWith("j-") || captionText.startsWith("j ") || captionText.includes("jamabandi") || captionText.includes("jama") || captionText.includes("जमाबंदी"));
+                if (jamaMatch && jamaMatch[1]) {
+                    referenceId = parseInt(jamaMatch[1], 10);
+                } else if (isJamabandiTag) {
+                    const fallbackNum = captionText.match(/^(?:j|jamabandi|jama|jb|जमाबंदी)[\s\-_:#]*(\d+)/i);
+                    if (fallbackNum && fallbackNum[1]) referenceId = parseInt(fallbackNum[1], 10);
+                }
+
+                // Sale Deed match (e.g. S-5552, S 5552, S5552, s, sale_deed, saledeed, sale deed, registry, deed, बैनामा, विक्रय पत्र)
+                const saleRegex = /^(?:s|sale_deed|saledeed|sale deed|registry|deed|बैनामा|विक्रय पत्र)(?:[\s\-_:#]*(\d+))?$/i;
+                const salePrefixRegex = /^(?:s|sale_deed|saledeed|sale deed|registry|deed|बैनामा|विक्रय पत्र)[\s\-_:#]+(\d+)/i;
+                let saleMatch = captionText.match(saleRegex) || captionText.match(salePrefixRegex);
+                const isSaleDeedTag = !isAadhaarTag && !isPanTag && !isJamabandiTag && (!!saleMatch || captionText === "s" || captionText.startsWith("s-") || captionText.startsWith("s ") || captionText.includes("sale deed") || captionText.includes("sale_deed") || captionText.includes("saledeed") || captionText.includes("बैनामा") || captionText.includes("विक्रय पत्र") || captionText.includes("रजिस्ट्री"));
+                if (saleMatch && saleMatch[1]) {
+                    referenceId = parseInt(saleMatch[1], 10);
+                } else if (isSaleDeedTag) {
+                    const fallbackNum = captionText.match(/^(?:s|sale_deed|saledeed|sale deed|registry|deed|बैनामा|विक्रय पत्र)[\s\-_:#]*(\d+)/i);
+                    if (fallbackNum && fallbackNum[1]) referenceId = parseInt(fallbackNum[1], 10);
+                }
+
                 const isExactGreeting = /^(hi|hello|hey|menu|help|start|namaste|hlo|helo|info)[\s!.,?]*$/i.test(captionText) || 
                                         captionText === 'menu' || 
                                         captionText === 'hi' ||
@@ -741,13 +789,13 @@ async function startBotSession(botConfig) {
                 } else {
                     // DOCUMENT_OCR Bot Line:
                     // 1. Exact greeting/menu command (hi, menu, start, help)
-                    // 2. Document command or upload with valid tag (a, p, j, s)
+                    // 2. Document command or upload with valid tag (a, p, j, s, A-3650, J-4750, etc.)
                     if (isExactGreeting || isAadhaarTag || isPanTag || isJamabandiTag || isSaleDeedTag) {
                         isBotCommand = true;
                     }
                 }
 
-                console.log(`🎯 [${sessionId}] isCustomMenuBot=${isCustomMenuBot} | isBotCommand=${isBotCommand} | isExactGreeting=${isExactGreeting}`);
+                console.log(`🎯 [${sessionId}] isCustomMenuBot=${isCustomMenuBot} | isBotCommand=${isBotCommand} | isExactGreeting=${isExactGreeting} | RefID=${referenceId}`);
 
                 // If NOT a bot trigger, DO NOTHING! Let normal human chat work without any bot interruption.
                 if (!isBotCommand) {
@@ -755,27 +803,13 @@ async function startBotSession(botConfig) {
                 }
 
                 // ---------------------------------------------------------
-                // ACCESS CONTROL LAYER (WH_ALLOWED_USERS WHITELIST CHECK)
-                // Evaluated ONLY when someone intentionally triggers a bot command
+                // ACCESS CONTROL LAYER
+                // Document OCR and self-testing are open to any sender number.
                 // ---------------------------------------------------------
                 const authCheck = await isSenderAllowed(senderMobile, sessionId);
-                console.log(`🔐 [${sessionId}] Access check for ${senderMobile}: allowed=${authCheck.allowed}`);
+                console.log(`🔐 [${sessionId}] Access check for ${senderMobile}: allowed=${authCheck.allowed || 'open'}`);
 
-                if (!authCheck.allowed) {
-                    logEvent("ACCESS_DENIED", `Blocked unauthorized trigger from ${senderMobile} on ${sessionId}: ${authCheck.reason}`);
-                    try {
-                        await sock.sendMessage(replyJid, {
-                            text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(replyJid, {
-                            text: `⚠️ *Access Restricted*\n\nYour mobile number (+${senderMobile}) is not authorized to use this service.\nPlease contact the administrator to request access.`
-                        });
-                    }
-                    continue;
-                }
-
-                logEvent("LIVE_MESSAGE", `[${sessionId}] Triggered by: ${senderMobile} (${authCheck.user?.user_name || 'User'}) | Text: "${text}" | Media: ${isMedia}`);
+                logEvent("LIVE_MESSAGE", `[${sessionId}] Triggered by: ${senderMobile} (${authCheck.user?.user_name || 'User'}) | Text: "${text}" | Media: ${isMedia} | RefID: ${referenceId}`);
 
                 let targetMsgObj = msg;
                 let quotedRef = null;
@@ -822,35 +856,35 @@ async function startBotSession(botConfig) {
                 if (isAadhaarTag) {
                     if (!isMedia && !quotedMsg) {
                         await safeSendMessage(sessionId, sock, replyJid, {
-                            text: `📸 *Aadhaar Image / PDF Required*\n\nPlease attach an image or PDF of the Aadhaar card (Front or Back) with the caption *a*, or reply to an existing document with *a*.`
+                            text: `📸 *Aadhaar Image / PDF Required*\n\nPlease attach an image or PDF of the Aadhaar card (Front or Back) with caption like *a* or *A-3650*, or reply to an existing document with the caption.`
                         }, { quoted: msg });
                         continue;
                     }
-                    await handleAadhaarGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleAadhaarGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber, referenceId);
                 } else if (isPanTag) {
                     if (!isMedia && !quotedMsg) {
                         await safeSendMessage(sessionId, sock, replyJid, {
-                            text: `📸 *PAN Card Image / PDF Required*\n\nPlease attach an image or PDF of the PAN card with the caption *p*, or reply to an existing document with *p*.`
+                            text: `📸 *PAN Card Image / PDF Required*\n\nPlease attach an image or PDF of the PAN card with caption like *p* or *P-1234*, or reply to an existing document with the caption.`
                         }, { quoted: msg });
                         continue;
                     }
-                    await handlePanGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handlePanGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber, referenceId);
                 } else if (isJamabandiTag) {
                     if (!isMedia && !quotedMsg) {
                         await safeSendMessage(sessionId, sock, replyJid, {
-                            text: `📄 *Jamabandi Document Required*\n\nPlease attach an image or PDF of the Jamabandi (P-26C) with the caption *j*, or reply to an existing document with *j*.`
+                            text: `📄 *Jamabandi Document Required*\n\nPlease attach an image or PDF of the Jamabandi (P-26C) with caption like *j* or *J-4750*, or reply to an existing document with the caption.`
                         }, { quoted: msg });
                         continue;
                     }
-                    await handleJamabandiGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleJamabandiGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber, referenceId);
                 } else if (isSaleDeedTag) {
                     if (!isMedia && !quotedMsg) {
                         await safeSendMessage(sessionId, sock, replyJid, {
-                            text: `📜 *Sale Deed Document Required*\n\nPlease attach an image or PDF of the Sale Deed (बैनामा / विक्रय पत्र) with the caption *s*, or reply to an existing document with *s*.`
+                            text: `📜 *Sale Deed Document Required*\n\nPlease attach an image or PDF of the Sale Deed (बैनामा / विक्रय पत्र) with caption like *s* or *S-5552*, or reply to an existing document with the caption.`
                         }, { quoted: msg });
                         continue;
                     }
-                    await handleSaleDeedGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber);
+                    await handleSaleDeedGeminiFlow(sessionId, sock, targetMsgObj, replyJid, senderMobile, quotedRef, mimeType, sessionState.currentBotNumber, referenceId);
                 }
             }
         } catch (err) {
@@ -911,21 +945,21 @@ async function sendMenuResponse(sessionId, sock, replyJid, quotedMsg, botNumber 
     const menuText = 
         `*Welcome to Fabkraft Document Assistant*\n` +
         `*Bot Line:* +${botNumber} &middot; \`${APP_VERSION}\`\n\n` +
-        `Send your document image or PDF with the appropriate caption to extract data & save automatically:\n\n` +
+        `Send your document image or PDF with the appropriate caption (and optional Reference ID) to extract data & save automatically:\n\n` +
         `*Aadhaar Card:*\n` +
-        `• Caption: *a* or *aadhar*\n` +
-        `• Format: Image or PDF\n` +
+        `• Caption: *a* or *A-3650* (A-<ReferenceID>)\n` +
+        `• Format: Image or PDF (Front or Back)\n` +
         `• Extracted: Name (English/Hindi), Relation Status, Father/Husband Name, DOB, Gender, Aadhaar No, VID, Address & PIN\n\n` +
         `*PAN Card:*\n` +
-        `• Caption: *p* or *pan*\n` +
+        `• Caption: *p* or *P-1234* (P-<ReferenceID>)\n` +
         `• Format: Image or PDF\n` +
         `• Extracted: Name, Father's Name, DOB, PAN No\n\n` +
         `*Jamabandi (Rajasthan P-26C):*\n` +
-        `• Caption: *j* or *jamabandi*\n` +
+        `• Caption: *j* or *J-4750* (J-<ReferenceID>)\n` +
         `• Format: Image or PDF\n` +
         `• Extracted: Village, Patwar Halka, Tehsil, District, Khata No, Total Area, Khatedar List & Khasra Plots\n\n` +
         `*Sale Deed (बैनामा / विक्रय पत्र):*\n` +
-        `• Caption: *s* or *sale_deed*\n` +
+        `• Caption: *s* or *S-5552* (S-<ReferenceID>)\n` +
         `• Format: Image or PDF\n` +
         `• Extracted: Deed No, Registration Date, SRO, Property Details, Area/Rakba, Boundaries, Consideration/Cheque, Seller & Buyer Details\n\n` +
         `Powered by FabKraft AI`;
@@ -936,8 +970,8 @@ async function sendMenuResponse(sessionId, sock, replyJid, quotedMsg, botNumber 
 /**
  * Handles Aadhaar Upload + AI Extraction
  */
-async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
-    logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with AI for ${senderMobile}...`);
+async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown', referenceId = null) {
+    logEvent("AADHAAR_START", `Processing Aadhaar (${mimeType}) with AI for ${senderMobile}...` + (referenceId ? ` [Ref: #${referenceId}]` : ''));
 
     await safeSendMessage(sessionId, sock, replyJid, {
         text: `Aadhaar Card detected. Extracting details and saving...`
@@ -975,6 +1009,7 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
 
         const dbResult = await insertOrUpdateAadhaar({
             uploadId,
+            referenceId,
             aadharNumber: details.aadharNumber,
             virtualId: details.vidNumber,
             nameEnglish: details.nameEnglish,
@@ -1046,10 +1081,13 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
         const sideLabel = dbResult?.side === 'both' ? 'Front & Back (Complete)' : (dbResult?.side === 'back' ? 'Back Side' : 'Front Side');
         const actionLabel = dbResult?.action === 'updated' ? ' (Merged with Existing Record)' : '';
         const recordId = dbResult?.recordId || uploadId;
+        const finalRefId = referenceId || rec.reference_id;
+        const refLine = finalRefId ? `*Reference ID:* #${finalRefId}\n` : '';
 
         const replyText = 
             `*AADHAAR EXTRACTED & SAVED*${actionLabel}\n\n` +
             `*Record ID:* #${recordId}\n` +
+            refLine +
             `*Document Scan:* ${sideLabel}\n` +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Name (English):* ${displayVal(finalNameEng)}\n` +
@@ -1079,8 +1117,8 @@ async function handleAadhaarGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, s
 /**
  * Handles PAN Upload + AI Extraction
  */
-async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
-    logEvent("PAN_START", `Processing PAN (${mimeType}) with AI for ${senderMobile}...`);
+async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown', referenceId = null) {
+    logEvent("PAN_START", `Processing PAN (${mimeType}) with AI for ${senderMobile}...` + (referenceId ? ` [Ref: #${referenceId}]` : ''));
 
     await safeSendMessage(sessionId, sock, replyJid, {
         text: `PAN Card detected. Extracting details and saving...`
@@ -1117,6 +1155,7 @@ async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, sende
         if (details.panNumber && details.panNumber !== "Not Found") {
             panResult = await insertOrUpdatePan({
                 uploadId,
+                referenceId,
                 panNumber: details.panNumber,
                 name: details.name,
                 fatherName: details.fatherName,
@@ -1129,10 +1168,12 @@ async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, sende
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
         const panRecordId = panResult?.recordId || uploadId;
+        const refLine = referenceId ? `*Reference ID:* #${referenceId}\n` : '';
 
         const replyText = 
             `*PAN CARD EXTRACTED & SAVED*\n\n` +
             `*Record ID:* #${panRecordId}\n` +
+            refLine +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Name:* ${displayVal(details.name)}\n` +
             `*Father's Name:* ${displayVal(details.fatherName)}\n` +
@@ -1155,8 +1196,8 @@ async function handlePanGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, sende
 /**
  * Handles Jamabandi Upload + AI Extraction
  */
-async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
-    logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with AI for ${senderMobile}...`);
+async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown', referenceId = null) {
+    logEvent("JAMABANDI_START", `Processing Jamabandi (${mimeType}) with AI for ${senderMobile}...` + (referenceId ? ` [Ref: #${referenceId}]` : ''));
 
     await safeSendMessage(sessionId, sock, replyJid, {
         text: `Jamabandi Document detected. Extracting land records and saving...`
@@ -1195,6 +1236,7 @@ async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid,
 
         const jbResult = await insertJamabandiRecord({
             uploadId,
+            referenceId,
             formName: details.formName,
             documentType: details.documentType,
             village: details.village,
@@ -1226,6 +1268,7 @@ async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid,
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
         const jamabandiRecordId = jbResult?.recordId || uploadId;
+        const refLine = referenceId ? `*Reference ID:* #${referenceId}\n` : '';
 
         const khatedars = Array.isArray(details.khatedarDetails) ? details.khatedarDetails : [];
         const khasras = Array.isArray(details.khasraDetails) ? details.khasraDetails : [];
@@ -1238,6 +1281,7 @@ async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid,
         const replyText = 
             `*JAMABANDI EXTRACTED & SAVED*\n\n` +
             `*Record ID:* #${jamabandiRecordId}\n` +
+            refLine +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Village (ग्राम):* ${displayVal(details.village)}\n` +
             `*Patwar Halka:* ${displayVal(details.patwarHalka)}\n` +
@@ -1265,8 +1309,8 @@ async function handleJamabandiGeminiFlow(sessionId, sock, mediaMsgObj, replyJid,
 /**
  * Handles Sale Deed Upload + AI Extraction
  */
-async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown') {
-    logEvent("SALEDEED_START", `Processing Sale Deed (${mimeType}) with AI for ${senderMobile}...`);
+async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, senderMobile, quotedRef = null, mimeType = 'image/jpeg', currentBotNumber = 'Unknown', referenceId = null) {
+    logEvent("SALEDEED_START", `Processing Sale Deed (${mimeType}) with AI for ${senderMobile}...` + (referenceId ? ` [Ref: #${referenceId}]` : ''));
 
     await safeSendMessage(sessionId, sock, replyJid, {
         text: `Sale Deed Document detected. Extracting registry details and saving...`
@@ -1311,6 +1355,7 @@ async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, 
 
         const sdResult = await insertSaleDeedRecord({
             uploadId,
+            referenceId,
             documentType: details.document_type || 'Sale Deed',
             deedNumber: details.deed_number,
             registrationDate: details.registration_date,
@@ -1360,6 +1405,7 @@ async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, 
 
         const displayVal = (val) => (val && String(val).trim().length > 0 && val !== "Not Found") ? val : "Not Found";
         const saleDeedRecordId = sdResult?.recordId || uploadId;
+        const refLine = referenceId ? `*Reference ID:* #${referenceId}\n` : '';
 
         let areaText = displayVal(area.total_area_sqft || prop.rakba);
         let considerationText = cons.sale_amount ? `₹${Number(cons.sale_amount).toLocaleString('en-IN')}` : 'Not Found';
@@ -1367,6 +1413,7 @@ async function handleSaleDeedGeminiFlow(sessionId, sock, mediaMsgObj, replyJid, 
         const replyText = 
             `*SALE DEED EXTRACTED & SAVED*\n\n` +
             `*Record ID:* #${saleDeedRecordId}\n` +
+            refLine +
             `*Sent By:* ${senderMobile}\n\n` +
             `*Deed / Registry No:* ${displayVal(details.deed_number)}\n` +
             `*Registration Date:* ${displayVal(details.registration_date)}\n` +

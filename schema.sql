@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS `wh_uploads` (
 CREATE TABLE IF NOT EXISTS `wh_aadhaar_card_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+    `reference_id` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 3650 from A-3650',
     `aadhar_number` VARCHAR(20) NOT NULL UNIQUE COMMENT '12-digit Aadhaar Number',
     `virtual_id` VARCHAR(25) DEFAULT NULL COMMENT '16-digit VID',
     `name_english` VARCHAR(255) DEFAULT NULL,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS `wh_aadhaar_card_records` (
     `back_image_uri` VARCHAR(500) DEFAULT NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_reference_id` (`reference_id`),
     INDEX `idx_aadhar_number` (`aadhar_number`),
     INDEX `idx_sender_mobile` (`sender_mobile`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS `wh_aadhaar_card_records` (
 CREATE TABLE IF NOT EXISTS `wh_pan_card_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+    `reference_id` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 1234 from P-1234',
     `pan_number` VARCHAR(20) NOT NULL UNIQUE COMMENT '10-character Alphanumeric PAN',
     `name` VARCHAR(255) DEFAULT NULL,
     `father_name` VARCHAR(255) DEFAULT NULL,
@@ -79,6 +82,7 @@ CREATE TABLE IF NOT EXISTS `wh_pan_card_records` (
     `image_uri` VARCHAR(500) DEFAULT NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_reference_id` (`reference_id`),
     INDEX `idx_pan_number` (`pan_number`),
     INDEX `idx_sender_mobile` (`sender_mobile`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -101,6 +105,7 @@ CREATE TABLE IF NOT EXISTS `wh_baileys_auth` (
 CREATE TABLE IF NOT EXISTS `wh_old_jamabandi_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+    `reference_id` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 4750 from J-4750',
     `form_name` VARCHAR(255) DEFAULT NULL,
     `document_type` VARCHAR(255) DEFAULT NULL,
     `village` VARCHAR(255) DEFAULT NULL,
@@ -131,6 +136,7 @@ CREATE TABLE IF NOT EXISTS `wh_old_jamabandi_records` (
     `mime_type` VARCHAR(50) DEFAULT 'image/jpeg',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_reference_id` (`reference_id`),
     INDEX `idx_village` (`village`),
     INDEX `idx_tehsil` (`tehsil`),
     INDEX `idx_district` (`district`),
@@ -144,6 +150,7 @@ CREATE TABLE IF NOT EXISTS `wh_old_jamabandi_records` (
 CREATE TABLE IF NOT EXISTS `wh_sale_deed_records` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `upload_id` INT DEFAULT NULL COMMENT 'Reference to wh_uploads.id',
+    `reference_id` INT DEFAULT NULL COMMENT 'External Reference ID e.g. 5552 from S-5552',
     `document_type` VARCHAR(255) DEFAULT NULL,
     `deed_number` VARCHAR(100) DEFAULT NULL,
     `registration_date` VARCHAR(50) DEFAULT NULL,
@@ -191,6 +198,7 @@ CREATE TABLE IF NOT EXISTS `wh_sale_deed_records` (
     `mime_type` VARCHAR(50) DEFAULT 'image/jpeg',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_reference_id` (`reference_id`),
     INDEX `idx_deed_number` (`deed_number`),
     INDEX `idx_village` (`village`),
     INDEX `idx_tehsil` (`tehsil`),
