@@ -256,45 +256,28 @@ async function insertOrUpdateAadhaar({
     };
 
     try {
-        let existing = null;
+        // Strict Validation: Aadhaar Number must be a valid 12-digit format
+        if (!payload.aadhar_number || !/^\d{4}\s\d{4}\s\d{4}$/.test(payload.aadhar_number)) {
+            console.log(`❌ [Aadhaar Validation Failed] Invalid or missing 12-digit Aadhaar number: "${payload.aadhar_number}"`);
+            throw new Error('Aadhaar Number (12 digits) not detected. Please provide a clear image showing the Aadhaar number.');
+        }
 
-        // 1. Strict Lookup: Exact valid 12-digit Aadhaar Number ONLY (Format: "XXXX XXXX XXXX")
-        if (payload.aadhar_number && /^\d{4}\s\d{4}\s\d{4}$/.test(payload.aadhar_number)) {
-            const [rows] = await pool.execute(
-                'SELECT * FROM wh_aadhaar_card_records WHERE aadhar_number = ? LIMIT 1',
-                [payload.aadhar_number]
-            );
-            if (rows.length > 0) {
-                existing = rows[0];
-                console.log(`🔍 [Aadhaar Match] Found existing record ID #${existing.id} matching Aadhaar "${payload.aadhar_number}"`);
-            } else {
-                console.log(`ℹ️ [Aadhaar No Match] Aadhaar "${payload.aadhar_number}" not in DB -> Inserting new record`);
-            }
+        // Strict Matching: Query exclusively by 12-digit Aadhaar Number (No time window, no sender fallback)
+        let existing = null;
+        const [rows] = await pool.execute(
+            'SELECT * FROM wh_aadhaar_card_records WHERE aadhar_number = ? LIMIT 1',
+            [payload.aadhar_number]
+        );
+
+        if (rows.length > 0) {
+            existing = rows[0];
+            console.log(`🔍 [Aadhaar Match] Found existing record ID #${existing.id} matching Aadhaar "${payload.aadhar_number}"`);
         } else {
-            console.log(`ℹ️ [Aadhaar No 12-Digit Number] Extracted value "${payload.aadhar_number}" is not a valid 12-digit Aadhaar`);
-            // If back scan has no Aadhaar number, match with the most recent front scan uploaded by this sender (last 15 mins)
-            if (isBackScan && payload.sender_mobile && payload.sender_mobile !== 'Unknown') {
-                try {
-                    const [recentRows] = await pool.execute(
-                        `SELECT * FROM wh_aadhaar_card_records 
-                         WHERE sender_mobile = ? AND (back_image_uri IS NULL OR back_image_uri = '') 
-                         ORDER BY id DESC LIMIT 1`,
-                        [payload.sender_mobile]
-                    );
-                    if (recentRows.length > 0) {
-                        existing = recentRows[0];
-                        console.log(`🔗 [Aadhaar Merge] Matched back-side scan to recent front scan ID #${existing.id} for sender ${payload.sender_mobile}`);
-                    }
-                } catch (recErr) {
-                    console.warn("⚠️ [Aadhaar Merge] Recent front scan match error:", recErr.message);
-                }
-            }
+            console.log(`ℹ️ [Aadhaar No Match] Aadhaar "${payload.aadhar_number}" not in DB -> Inserting new record`);
         }
 
         // Case A: New Record -> INSERT (Populate ONLY ONE image field at first time)
         if (!existing) {
-            const finalAadhaarNum = payload.aadhar_number || `DOC${Date.now().toString().slice(-8)}`;
-            
             // First time: If pure back scan -> back_image_uri, otherwise -> front_image_uri
             const frontUri = (isBackScan && !isFrontScan) ? null : actualUploadUri;
             const backUri = (isBackScan && !isFrontScan) ? actualUploadUri : null;
@@ -316,7 +299,7 @@ async function insertOrUpdateAadhaar({
             const insertParams = [
                 payload.upload_id,
                 payload.reference_id,
-                finalAadhaarNum,
+                payload.aadhar_number,
                 payload.virtual_id,
                 payload.name_english,
                 payload.name_hindi,

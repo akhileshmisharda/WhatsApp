@@ -126,9 +126,10 @@ Strict Rules:
 1. UNIFIED ARRAY: Every document found in the scan must be added as a separate object inside the 'extracted_documents' array under 'aadhaar_card'.
 2. MAPPING KEYS: You MUST accurately identify the 'party_type' (property, buyer, seller, witness, unassigned) and 'document_type' (sale_deed, aadhaar_card, pan_card) to match the system checklist.
 3. DETECT SIDE: Identify whether the scanned image is the "front" side (contains photo, name, dob, gender, 12-digit aadhaar number), the "back" side (contains address, father/husband name, pincode, barcode/QR), or "both" (contains both front & back).
-4. AADHAAR NUMBER ACCURACY: 
-   - On the FRONT side, extract the clean 12-digit Aadhaar number (XXXX XXXX XXXX).
-   - On the BACK side, Aadhaar numbers are NOT printed (only helpline numbers like 1947, 1800-xxx or barcodes exist). NEVER extract toll-free numbers, PIN codes, or barcode digits as Aadhaar number. On the back side, ALWAYS set 'aadhaarNumber': "".
+4. AADHAAR NUMBER EXTRACTION & ACCURACY: 
+   - Extract the 12-digit Aadhaar number formatted as 'XXXX XXXX XXXX' wherever it is visible on the card (front side, back side, bottom margin, or text inside QR/barcode).
+   - NEVER extract helpline numbers (like 1947, 1800-xxx) or 6-digit PIN codes as the Aadhaar number.
+   - If no valid 12-digit Aadhaar number is visible or readable anywhere on the scan, set 'aadhaarNumber': "".
 5. FATHER VS HUSBAND NAME & RELATION STATUS:
    - Identify relation_status as one of: "W/O" (Wife of / पत्नी), "S/O" (Son of / आत्मज / पुत्र), "D/O" (Daughter of / सुपुत्री), "C/O" (Care of / संरक्षक).
    - MANDATORY BILINGUAL TRANSLITERATION: You MUST provide BOTH husbandName_English AND husbandName_Hindi if a husband is found (transliterate phonetically into Devanagari script if Hindi is not explicitly printed, e.g., 'Brij Mohan' -> 'बृजमोहन', 'Akhilesh' -> 'अखिलेश'). Leave fatherName fields empty ("").
@@ -146,7 +147,7 @@ Strict Rules:
       "document_type": "aadhaar_card",
       "detected_side": "front",
       "aadhaar_card_data": {
-        "aadhaarNumber": "12-digit Aadhaar number formatted as 'XXXX XXXX XXXX' (Look at front or bottom of card/back side). Empty only if not present. Do NOT extract helpline 1947.",
+        "aadhaarNumber": "12-digit Aadhaar number formatted as 'XXXX XXXX XXXX' (look at front, back, bottom margin, or QR text). Empty string '' only if not present at all. Do NOT extract helpline 1947 or PIN code.",
         "vidNumber": "16-digit Virtual ID formatted as 'XXXX XXXX XXXX XXXX' if present (e.g., after 'VID :' on front or back).",
         "fullName_English": "Full name in English exactly as printed or empty string",
         "fullName_Hindi": "Full name in Hindi (Devanagari script) exactly as printed or empty string",
